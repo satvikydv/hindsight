@@ -117,7 +117,8 @@ MATCH (pb:Playbook {id: $pid})
 SET pb.attempt_count = pb.attempt_count + 1,
     pb.success_count = pb.success_count + $won,
     pb.last_used_at = $now
-SET pb.weight = (pb.success_count + 1.0) / (pb.attempt_count + 2.0)
+SET pb.base_weight = (pb.success_count + 1.0) / (pb.attempt_count + 2.0)
+SET pb.weight = pb.base_weight
 RETURN pb.weight AS weight
 """
 
@@ -131,10 +132,10 @@ MATCH (t:Team {name: $team})
 CREATE (t)-[:OWNS {valid_from: $now, source: $source}]->(s)
 """
 
-# Q15 Acquire the incident lock; no row back means another agent holds it
+# Q15 Acquire (or refresh, when the caller already holds it) the incident lock; no row back means another agent holds it
 Q15_ACQUIRE_LOCK = """
 MATCH (i:Incident {id: $iid})
-WHERE i.lock_owner IS NULL OR i.lock_until < $now
+WHERE i.lock_owner IS NULL OR i.lock_owner = $agent OR i.lock_until < $now
 SET i.lock_owner = $agent, i.lock_until = $now + $ttl_ms
 RETURN i.lock_owner AS owner
 """

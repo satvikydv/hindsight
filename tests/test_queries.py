@@ -75,6 +75,8 @@ def test_incident_lock_blocks_second_writer_until_expiry(graph):
     p = {"iid": "i1", "ttl_ms": 30_000}
     assert graph.write(q.Q15_ACQUIRE_LOCK, {**p, "agent": "triage", "now": 1_000}) == [["triage"]]
     assert graph.write(q.Q15_ACQUIRE_LOCK, {**p, "agent": "investigator", "now": 2_000}) == []
+    assert graph.write(q.Q15_ACQUIRE_LOCK, {**p, "agent": "triage", "now": 3_000}) == [["triage"]]  # holder refreshes
+    assert graph.write(q.Q15_ACQUIRE_LOCK, {**p, "agent": "investigator", "now": 20_000}) == []  # refresh extended it
     assert graph.write(q.Q15_ACQUIRE_LOCK, {**p, "agent": "investigator", "now": 40_000}) == [["investigator"]]
 
 

@@ -16,6 +16,18 @@ RANGE_INDEXES = [
     "CREATE INDEX FOR (t:Team) ON (t.name)",
     "CREATE INDEX FOR (p:Person) ON (p.name)",
     "CREATE INDEX FOR (f:Fact) ON (f.id)",
+    "CREATE INDEX FOR (d:Datastore) ON (d.id)",
+    "CREATE INDEX FOR (d:Datastore) ON (d.name)",
+    "CREATE INDEX FOR (c:ConfigFlag) ON (c.id)",
+    "CREATE INDEX FOR (c:ConfigFlag) ON (c.key)",
+    "CREATE INDEX FOR (h:Hypothesis) ON (h.id)",
+    "CREATE INDEX FOR (h:Hypothesis) ON (h.incident_id)",
+    "CREATE INDEX FOR (s:Symptom) ON (s.id)",
+    "CREATE INDEX FOR (m:Message) ON (m.id)",
+    "CREATE INDEX FOR (s:Step) ON (s.id)",
+    "CREATE INDEX FOR (p:Person) ON (p.id)",
+    "CREATE INDEX FOR (t:Team) ON (t.id)",
+    "CREATE INDEX FOR (a:Agent) ON (a.name)",
 ]
 
 
