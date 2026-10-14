@@ -56,6 +56,14 @@ YIELD node, score
 RETURN node.id AS incident, score
 """
 
+# Q17 (added, not in the PRD) Direct dependencies of each incident's origin service, for the structural-recall
+# "shared neighbours" term. One round trip for the current incident and all candidates.
+Q17_ORIGIN_DEPENDENCIES = """
+MATCH (i:Incident)-[:AFFECTS {role: 'origin'}]->(s:Service)-[r:DEPENDS_ON]->(d)
+WHERE i.id IN $ids AND r.valid_to IS NULL
+RETURN i.id AS incident, collect(d.name) AS deps
+"""
+
 # Q6 Candidate playbooks from similar incidents (active only, best weight first)
 Q6_CANDIDATE_PLAYBOOKS = """
 MATCH (i:Incident)-[:RESOLVED_BY]->(pb:Playbook)

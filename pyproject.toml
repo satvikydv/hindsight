@@ -21,3 +21,5 @@ dev = ["pytest>=8", "pytest-asyncio>=0.24"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not live'"
+markers = ["live: calls the real OpenAI API (costs a few tokens); run with `pytest -m live`"]
