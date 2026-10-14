@@ -39,6 +39,10 @@ def set_status(g: TenantGraph, iid: str, status: str, at: int, reason: str | Non
             {"iid": iid, "st": status, "reason": reason, "at": at, "terminal": status in TERMINAL_STATUSES})
 
 
+def set_severity(g: TenantGraph, iid: str, severity: str) -> None:
+    g.write("MATCH (i:Incident {id: $iid}) SET i.severity = $sev", {"iid": iid, "sev": severity})
+
+
 def add_usage(g: TenantGraph, iid: str, steps: int = 0, tokens: int = 0) -> None:
     """Running step and token counts, read back for the learning-curve chart."""
     g.write("MATCH (i:Incident {id: $iid}) SET i.steps = i.steps + $steps, i.tokens = i.tokens + $tokens",

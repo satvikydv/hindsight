@@ -64,6 +64,33 @@ WHERE i.id IN $ids AND r.valid_to IS NULL
 RETURN i.id AS incident, collect(d.name) AS deps
 """
 
+# Q18 (added) The origin and everything it depends on within 2 hops, current edges only. Used for the Remediator's
+# allowed scope and as the candidate set for suspect ranking.
+Q18_NEIGHBOURHOOD = """
+MATCH p = (o:Service {name: $svc})-[:DEPENDS_ON*0..2]->(n)
+WHERE all(r IN relationships(p) WHERE r.valid_to IS NULL)
+RETURN n.name AS name, labels(n)[0] AS label, n.id AS id, n.tier AS tier, n.pagerank AS pagerank,
+       min(length(p)) AS hops
+ORDER BY hops, name
+"""
+
+# Q19 (added) How often each service was the root cause of past resolved incidents (the suspect score's history term).
+# A Deploy counts for the service it was deployed on, a ConfigFlag for the service that has it.
+Q19_PAST_CAUSE_COUNTS = """
+MATCH (i:Incident {status: 'resolved'})-[:ROOT_CAUSE]->(rc)
+OPTIONAL MATCH (rc)-[:DEPLOYED]->(ds:Service)
+OPTIONAL MATCH (fs:Service)-[:HAS_FLAG]->(rc)
+RETURN coalesce(ds.name, fs.name, rc.name) AS service, count(DISTINCT i) AS n
+"""
+
+# Q21 (added) Flag changes on a set of services since a time (a flag change is a new HAS_FLAG edge).
+Q21_RECENT_FLAG_CHANGES = """
+MATCH (s:Service)-[h:HAS_FLAG]->(f:ConfigFlag)
+WHERE s.name IN $names AND h.valid_from >= $since
+RETURN f.id AS flag_id, s.name AS service, f.key AS key, f.value AS value, h.valid_from AS at
+ORDER BY at DESC
+"""
+
 # Q6 Candidate playbooks from similar incidents (active only, best weight first)
 Q6_CANDIDATE_PLAYBOOKS = """
 MATCH (i:Incident)-[:RESOLVED_BY]->(pb:Playbook)
