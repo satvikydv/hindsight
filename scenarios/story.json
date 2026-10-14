@@ -1,0 +1,23 @@
+[
+  {
+    "id": "story-1",
+    "fault_class": "bad_deploy",
+    "service": "checkout-api",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "story-2",
+    "fault_class": "bad_deploy",
+    "service": "refund-api",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "story-3",
+    "fault_class": "bad_flag",
+    "service": "fraud-scorer",
+    "planted_injection": false,
+    "self_heal": false
+  }
+]

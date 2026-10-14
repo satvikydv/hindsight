@@ -1,0 +1,58 @@
+[
+  {
+    "id": "heldout-1",
+    "fault_class": "bad_deploy",
+    "service": "dispute-service",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-2",
+    "fault_class": "bad_flag",
+    "service": "auth-service",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-3",
+    "fault_class": "db_pool_exhaustion",
+    "service": "session-cache",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-4",
+    "fault_class": "memory_leak",
+    "service": "feature-flags",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-5",
+    "fault_class": "cert_expiry",
+    "service": "event-bus-adapter",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-6",
+    "fault_class": "dependency_outage",
+    "service": "fx-rates",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-7",
+    "fault_class": "traffic_spike",
+    "service": "api-gateway",
+    "planted_injection": false,
+    "self_heal": false
+  },
+  {
+    "id": "heldout-8",
+    "fault_class": "cascading",
+    "service": "identity-db",
+    "planted_injection": false,
+    "self_heal": false
+  }
+]
