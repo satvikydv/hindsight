@@ -98,7 +98,7 @@ def test_health_and_tenant_creation(api):
     ("get", "/tenant"), ("get", "/incidents"), ("post", "/incidents"), ("get", "/incidents/x"),
     ("get", "/incidents/x/trace"), ("get", "/incidents/x/stream"), ("post", "/incidents/x/cancel"),
     ("get", "/actions/x/explain"), ("get", "/graph/subgraph?center=x"), ("get", "/playbooks"),
-    ("post", "/facts/correct"), ("post", "/demo/reset")])
+    ("post", "/facts/correct"), ("post", "/demo/reset"), ("get", "/catalog")])
 def test_every_tenant_route_rejects_a_missing_or_bad_key(api, method, path):
     assert getattr(api.c, method)(path).status_code == 401
     assert getattr(api.c, method)(path, headers={"X-Tenant-Key": "hk_nope"}).status_code == 401
@@ -361,6 +361,32 @@ def test_playbooks_route_lists_what_was_learned(api):
     api.run(hdr)
     [pb] = api.c.get("/playbooks", headers=hdr).json()["playbooks"]
     assert pb["name"] == "bad_deploy: rollback" and pb["status"] == "active" and len(pb["derived_from"]) == 1
+
+
+# ---- console support: catalog and saved benchmarks -------------------------------------------------------------------
+def test_catalog_offers_only_targets_the_incident_route_accepts(api):
+    _, hdr = api.tenant()
+    cat = api.c.get("/catalog", headers=hdr).json()
+    assert {c["name"] for c in cat["fault_classes"]} >= {"bad_deploy", "db_pool_exhaustion", "traffic_spike"}
+    for c in cat["fault_classes"]:
+        assert c["services"], c["name"]
+    assert [s["id"] for s in cat["scenarios"]] == ["story-1", "story-2", "story-3"]
+    assert cat["default"]["service"] in next(c for c in cat["fault_classes"] if c["name"] == "bad_deploy")["services"]
+
+
+def test_saved_benchmarks_are_listed_and_served_without_a_key(api, monkeypatch, tmp_path):
+    from api import main
+    monkeypatch.setattr(main, "RESULTS_DIR", tmp_path)
+    assert api.c.get("/bench").json() == {"benchmarks": []}
+    report = {"config": {"llm": "scripted"}, "records": [{}, {}], "started_at": "t0", "total_cost_usd": 0.5,
+              "aggregate": {}, "curves": {}}
+    (tmp_path / "bench-scripted-1.json").write_text(json.dumps(report), encoding="utf-8")
+    (tmp_path / "bench-broken.json").write_text("{not json", encoding="utf-8")
+    [row] = api.c.get("/bench").json()["benchmarks"]
+    assert row["id"] == "scripted-1" and row["llm"] == "scripted" and row["incidents"] == 2
+    assert api.c.get("/bench/scripted-1").json()["total_cost_usd"] == 0.5
+    assert api.c.get("/bench/nope").status_code == 404
+    assert api.c.get("/bench/..%2F..%2Fpyproject").status_code == 404      # the id is a lookup key, never a path
 
 
 # ---- isolation ----------------------------------------------------------------------------------------------------

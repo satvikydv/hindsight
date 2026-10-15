@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
@@ -27,6 +28,7 @@ from api.memory import semantic as sem
 from api.memory import trace
 from api.ratelimit import RateLimiter
 from api.runtime import NotConfigured, Runtime, TERMINAL, backfill_events, validate_spec
+from api.sim.faults import CATALOG, candidates
 from api.sim.generator import seed_tenant
 from api.sim.scenarios import build_scenarios
 from api.tenancy import (TenantContext, create_tenant, delete_tenant, resolve_key, tenant_context,
@@ -34,6 +36,7 @@ from api.tenancy import (TenantContext, create_tenant, delete_tenant, resolve_ke
 
 log = logging.getLogger(__name__)
 VERSION = "0.2.0"
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "docs" / "results"
 DEFAULT_FAULT = {"fault_class": "bad_deploy", "service": "checkout-api"}   # the demo's first incident
 
 
@@ -137,6 +140,15 @@ def create_app(llm: LLM | None = None, embedder: Embedder | None = None, resume:
         return {"tenant_id": ctx.tenant_id,
                 "nodes": ctx.graph.read("MATCH (n) RETURN count(n)")[0][0],
                 "services": ctx.graph.read("MATCH (s:Service) RETURN count(s)")[0][0]}
+
+    @app.get("/catalog")
+    def catalog(ctx: TenantContext = Depends(tenant_context)):
+        """What the console's Inject form offers: fault classes, valid targets for each, and the scripted scenarios."""
+        tr = runtime.tenant(ctx.tenant_id)
+        return {"fault_classes": [{"name": c.name, "injected_as": c.injected_as, "symptoms": c.symptoms,
+                                   "correct_fix": c.correct_fix, "services": candidates(tr.company, c.name)}
+                                  for c in CATALOG.values()],
+                "scenarios": build_scenarios(tr.company, tr.company.seed)["story"], "default": DEFAULT_FAULT}
 
     @app.post("/demo/reset")
     def demo_reset(ctx: TenantContext = Depends(tenant_context)):
@@ -317,6 +329,30 @@ def create_app(llm: LLM | None = None, embedder: Embedder | None = None, resume:
             return JSONResponse(status_code=404, content={"detail": str(e), "suggestions": e.suggestions})
         except ValueError as e:
             raise HTTPException(400, str(e))
+
+    # ---- benchmarks: precomputed reports committed under docs/results (no tokens spent per visitor) ----------------------
+    def bench_files() -> dict[str, Path]:
+        return {p.stem.removeprefix("bench-"): p for p in sorted(RESULTS_DIR.glob("bench-*.json"), reverse=True)}
+
+    @app.get("/bench")
+    def list_benchmarks():
+        out = []
+        for bid, path in bench_files().items():
+            try:
+                r = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            out.append({"id": bid, "llm": r["config"]["llm"], "started_at": r.get("started_at"),
+                        "incidents": len(r["records"]), "partial": bool(r.get("partial")),
+                        "total_cost_usd": r.get("total_cost_usd")})
+        return {"benchmarks": out}
+
+    @app.get("/bench/{bench_id}")
+    def get_benchmark(bench_id: str):
+        path = bench_files().get(bench_id)           # looked up in the listing: the id is never used to build a path
+        if path is None:
+            raise HTTPException(404, "no such benchmark")
+        return json.loads(path.read_text(encoding="utf-8"))
 
     return app
 
