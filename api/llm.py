@@ -222,9 +222,10 @@ class ScriptedLLM:
         self.calls += 1
         r = self.policy(tier, messages, tools)
         r.tokens = r.tokens or self.tokens_per_call
-        if not r.model:  # report usage as the real thing would: 90% input, priced from the real table
+        if not r.model:  # report usage as the real thing would, priced from the real table
             r.model = config.MODEL_STRONG if tier == "strong" else config.MODEL_FAST
-            r.prompt_tokens = int(r.tokens * 0.9)
-            r.completion_tokens = r.tokens - r.prompt_tokens
+            if not r.prompt_tokens:   # a policy may report its own split; otherwise assume 90% input
+                r.prompt_tokens = int(r.tokens * 0.9)
+                r.completion_tokens = r.tokens - r.prompt_tokens
             r.cost_usd = cost_usd(r.model, r.prompt_tokens, 0, r.completion_tokens)
         return r

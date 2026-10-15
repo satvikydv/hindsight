@@ -20,10 +20,34 @@ from api.memory import procedural as pr
 log = logging.getLogger(__name__)
 
 W_STRUCT, W_VECTOR, W_RECENCY = 0.5, 0.3, 0.2
-# structural overlap = weighted mix of these four signals (they sum to 1)
-S_JACCARD, S_DOMAIN, S_TIER, S_NEIGHBOURS = 0.4, 0.2, 0.1, 0.3
+# structural overlap = weighted mix of these five signals (they sum to 1). Symptom kinds and triage-time signals say
+# what KIND of failure it is, so they carry most of the weight; domain and tier barely matter (a bad-deploy playbook
+# transfers across domains); shared dependencies add some.
+S_JACCARD, S_SIGNALS, S_DOMAIN, S_TIER, S_NEIGHBOURS = 0.35, 0.35, 0.05, 0.05, 0.20
+SIGNAL_WINDOW_MS = 6 * 3_600_000
 TOP_K = 3
 MODES = ("off", "vector", "graph")
+
+
+def compute_signals(g: TenantGraph, iid: str, origin: str, now: int) -> list[str]:
+    """Cause-discriminating facts the graph can answer at triage time, before anyone investigates: is there a recent
+    (not reverted) deploy or flag change near the origin, a saturated datastore, a crashloop or an expired cert?
+    Two incidents with the same signals are the same KIND of failure even when their alerts look alike (a bad deploy and
+    a hard-down dependency both show error_rate, but only one has a recent deploy)."""
+    since = now - SIGNAL_WINDOW_MS
+    names = [r["name"] for r in g.rows(q.Q18_NEIGHBOURHOOD, {"svc": origin}) if r["label"] == "Service"]
+    found: set[str] = set()
+    if g.rows(q.Q2_RECENT_CHANGES, {"svc": origin, "since": since}):
+        found.add("deploy")
+    if g.rows(q.Q21_RECENT_FLAG_CHANGES, {"names": names, "since": since}):
+        found.add("flag")
+    for r in g.rows("MATCH (:Incident {id: $i})-[:SHOWED]->(y:Symptom)-[:OBSERVED_ON]->(n) "
+                    "RETURN y.kind AS kind, n.name AS node, labels(n)[0] AS label", {"i": iid}):
+        if r["kind"] in ("crashloop", "cert") and r["node"] == origin:
+            found.add(r["kind"])
+        if r["kind"] == "saturation" and r["label"] == "Datastore":
+            found.add("saturation")
+    return sorted(found)
 
 
 @dataclass
@@ -70,11 +94,15 @@ def _structural(g: TenantGraph, iid: str) -> dict[str, dict]:
     if not out:
         return {}
     deps = {r["incident"]: set(r["deps"]) for r in g.rows(q.Q17_ORIGIN_DEPENDENCIES, {"ids": [iid, *out]})}
-    mine = deps.get(iid, set())
+    signals = {r["id"]: set(r["signals"] or []) for r in g.rows(
+        "MATCH (i:Incident) WHERE i.id IN $ids RETURN i.id AS id, i.signals AS signals", {"ids": [iid, *out]})}
+    mine, my_signals = deps.get(iid, set()), signals.get(iid, set())
     for pid, s in out.items():
         s["neighbours"] = _jaccard(mine, deps.get(pid, set()))
-        s["score"] = (S_JACCARD * s["jaccard"] + S_DOMAIN * s["same_domain"] + S_TIER * s["same_tier"]
-                      + S_NEIGHBOURS * s["neighbours"])
+        theirs = signals.get(pid, set())
+        s["signals"] = 1.0 if not my_signals and not theirs else _jaccard(my_signals, theirs)   # both empty: same
+        s["score"] = (S_JACCARD * s["jaccard"] + S_SIGNALS * s["signals"] + S_DOMAIN * s["same_domain"]
+                      + S_TIER * s["same_tier"] + S_NEIGHBOURS * s["neighbours"])
     return out
 
 
@@ -130,8 +158,9 @@ def recall_similar(g: TenantGraph, embedder: Embedder, iid: str, now: int, mode:
 
     for r in out.similar:
         g.write("MATCH (a:Incident {id: $a}) MATCH (b:Incident {id: $b}) "
-                "MERGE (a)-[s:SIMILAR_TO]->(b) SET s.score = $score, s.basis = $basis",
-                {"a": iid, "b": r["incident"], "score": r["score"], "basis": r["basis"]})
+                "MERGE (a)-[s:SIMILAR_TO]->(b) SET s.score = $score, s.basis = $basis, s.structural = $structural",
+                {"a": iid, "b": r["incident"], "score": r["score"], "basis": r["basis"],
+                 "structural": r["parts"]["structural"]})
     if mode == "graph":
         out.playbooks = pr.candidates(g, [r["incident"] for r in out.similar])
     return out

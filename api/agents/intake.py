@@ -6,6 +6,7 @@ AFFECTS edges and writes the observed symptoms. Agents start from this subgraph.
 
 from api.graph import queries as q
 from api.memory import episodic as ep
+from api.memory.recall import compute_signals
 from api.sim.world import THRESHOLD, World
 
 # crashloop / cert / saturation are local signals: they do not propagate up the call graph, so they point at the origin
@@ -14,7 +15,10 @@ LOCAL_BONUS = 10.0
 
 
 def strength(alert: dict) -> float:
-    base = 1.0 if alert["metric"] == "cert_days_left" else alert["value"] / THRESHOLD[alert["metric"]]
+    """How loud an alert is: its value over its threshold, plus a bonus for signals that do not propagate. Symptoms with
+    no metric threshold (e.g. a suspicious log line) count as 1."""
+    metric, value = alert.get("metric"), alert.get("value")
+    base = 1.0 if metric == "cert_days_left" or metric not in THRESHOLD or value is None else value / THRESHOLD[metric]
     return base + (LOCAL_BONUS if alert["kind"] in LOCAL_KINDS else 0.0)
 
 
@@ -37,4 +41,5 @@ def open_from_page(g, world: World, iid: str) -> dict:
     ep.open_incident(g, iid, "", "sev3", world.now_ms, origin,
                      impacted=sorted({a["service"] for a in alerts if a["service"] in blast}))
     ep.add_symptoms(g, iid, alerts)
+    ep.set_signals(g, iid, compute_signals(g, iid, origin, world.now_ms))
     return {"origin": origin, "alerts": alerts}

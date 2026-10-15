@@ -177,10 +177,10 @@ class Coordinator:
             return None
         rows = self.g.rows(
             "MATCH (:Incident {id: $iid})-[s:SIMILAR_TO]->(p:Incident)-[:RESOLVED_BY]->(pb:Playbook {status: 'active'}) "
-            "WHERE s.score >= $min AND pb.weight >= $w "
-            "RETURN pb.id AS playbook, pb.name AS name, pb.weight AS weight, max(s.score) AS similarity, "
-            "pb.last_used_at AS last_used ORDER BY weight DESC, similarity DESC, last_used DESC LIMIT 1",
-            {"iid": ctx.iid, "min": config.FAST_PATH_MIN_SIMILARITY, "w": config.FAST_PATH_WEIGHT})
+            "WHERE s.structural >= $min AND pb.weight >= $w "
+            "RETURN pb.id AS playbook, pb.name AS name, pb.weight AS weight, max(s.structural) AS similarity, "
+            "pb.last_used_at AS last_used ORDER BY similarity DESC, weight DESC, last_used DESC LIMIT 1",
+            {"iid": ctx.iid, "min": config.FAST_PATH_MIN_STRUCTURE, "w": config.FAST_PATH_WEIGHT})
         return rows[0] if rows else None
 
     def _fast_path_of(self, iid: str) -> dict | None:
@@ -234,6 +234,7 @@ class Coordinator:
             self.emit("resolved", {"incident": ctx.iid, "reason": reason})
         self.emit("state_changed", {"incident": ctx.iid, "state": "CONSOLIDATE"})
         report = self._scribe(ctx, seq, status, reason)
+        write_events(self.g, self.world.settle(ctx.iid))     # humans clean up whatever the crew did not fix
         return self._result(ctx, status, reason, report, fast)
 
     def _escalate(self, ctx: ToolContext) -> None:

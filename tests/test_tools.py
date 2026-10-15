@@ -175,6 +175,10 @@ def test_recent_changes_finds_the_injected_deploy_and_flag_change(env):
     flags = run(f, "investigator", "recent_changes", service="checkout-api").result["flag_changes"]
     key = f.world.truth(f.iid)["extra"]["flag"]
     assert flags and flags[0]["key"] == key
+    old = f.world.truth(f.iid)["steps"][0]["value"]                  # the value the flag had before the bad change
+    assert flags[0]["previous"] == old and flags[0]["value"] != old
+    suspects = run(f, "investigator", "rank_suspects").result["suspects"]
+    assert next(c for s in suspects for c in s["recent_changes"] if c["type"] == "flag")["previous"] == old
     cited = f.g.read("MATCH (:Incident {id:$i})-[:TOOK]->(:Action {tool:'recent_changes'})-[:CITED]->(n:ConfigFlag) "
                      "RETURN n.key", {"i": f.iid})
     assert [key] == [r[0] for r in cited]

@@ -124,7 +124,7 @@ def _rank_suspects(ctx: ToolContext) -> dict:
                                                      "at": d["at"], "author": d["author"]})
     for f in ctx.g.rows(q.Q21_RECENT_FLAG_CHANGES, {"names": names, "since": since}):
         changes.setdefault(f["service"], []).append({"type": "flag", "key": f["key"], "value": f["value"],
-                                                     "at": f["at"]})
+                                                     "previous": f.get("previous"), "at": f["at"]})
     pr_max = ctx.g.read("MATCH (s:Service) RETURN max(s.pagerank)")[0][0] or 1.0
     past = {r["service"]: r["n"] for r in ctx.g.rows(q.Q19_PAST_CAUSE_COUNTS)}
     total = max(1, ctx.g.read("MATCH (i:Incident {status: 'resolved'}) RETURN count(i)")[0][0])
@@ -270,9 +270,10 @@ for _t in [
          {"node": STR, "as_of": {"type": "integer"}}, ["node"], {INVESTIGATOR}, _facts_about,
          _cite_target("fact lookup", "node")),
     Tool("propose_hypothesis", "Record a suspected cause with a confidence score 0-1. target_type is one of "
-         "Service, Datastore, Deploy (target = deploy id), ConfigFlag (target = flag key).",
+         "Service, Datastore, Deploy (target = deploy id), ConfigFlag (target = flag key). The Remediator may record one "
+         "after verifying a playbook's precondition, which is also what unlocks a guarded action such as failover.",
          {"text": STR, "score": {"type": "number"}, "target_type": {"type": "string", "enum": TARGET_TYPES},
-          "target": STR}, ["text", "score", "target_type", "target"], {INVESTIGATOR}, _propose_hypothesis,
+          "target": STR}, ["text", "score", "target_type", "target"], {INVESTIGATOR, REMEDIATOR}, _propose_hypothesis,
          _cite_hypothesis),
     Tool("update_hypothesis", "Re-score a hypothesis or mark it confirmed or rejected.",
          {"hypothesis_id": STR, "status": {"type": "string", "enum": ["open", "confirmed", "rejected"]},

@@ -17,7 +17,7 @@ ORDER BY hops, tier
 Q2_RECENT_CHANGES = """
 MATCH (origin:Service {name: $svc})-[:DEPENDS_ON*0..2]->(s)
 MATCH (d:Deploy)-[:DEPLOYED]->(s)
-WHERE d.at >= $since
+WHERE d.at >= $since AND d.reverted_at IS NULL
 OPTIONAL MATCH (a:Person)-[:AUTHORED]->(d)
 RETURN d.id AS deploy, d.version AS version, s.name AS service, d.at AS at,
        a.name AS author, d.flags_changed AS flags
@@ -33,13 +33,15 @@ SET node.pagerank = score
 # Q4 Structural recall: past resolved incidents with the same shape (symptom overlap, domain, tier, cause type).
 # ROOT_CAUSE is OPTIONAL (the PRD requires it): the current cause is unknown at recall time so it is only a hint, and an
 # incident whose Investigator never confirmed a cause must still be recallable by its shape.
+# Symptom kinds are compared on the ORIGIN service only (the PRD compares all of them): propagated alerts and red
+# herrings are noise for "what kind of failure is this".
 Q4_STRUCTURAL_RECALL = """
-MATCH (cur:Incident {id: $iid})-[:SHOWED]->(cs:Symptom)
-WITH cur, collect(DISTINCT cs.kind) AS curKinds
-MATCH (cur)-[:AFFECTS {role: 'origin'}]->(co:Service)
+MATCH (cur:Incident {id: $iid})-[:AFFECTS {role: 'origin'}]->(co:Service)
+MATCH (cur)-[:SHOWED]->(cs:Symptom)-[:OBSERVED_ON]->(co)
+WITH cur, co, collect(DISTINCT cs.kind) AS curKinds
 MATCH (past:Incident)-[:AFFECTS {role: 'origin'}]->(po:Service)
 WHERE past.status = 'resolved' AND past.id <> cur.id
-MATCH (past)-[:SHOWED]->(ps:Symptom)
+MATCH (past)-[:SHOWED]->(ps:Symptom)-[:OBSERVED_ON]->(po)
 WITH cur, curKinds, co, past, po, collect(DISTINCT ps.kind) AS pastKinds
 OPTIONAL MATCH (past)-[:ROOT_CAUSE]->(rc)
 WITH past, po, co, labels(rc)[0] AS causeType,
@@ -85,11 +87,13 @@ OPTIONAL MATCH (fs:Service)-[:HAS_FLAG]->(rc)
 RETURN coalesce(ds.name, fs.name, rc.name) AS service, count(DISTINCT i) AS n
 """
 
-# Q21 (added) Flag changes on a set of services since a time (a flag change is a new HAS_FLAG edge).
+# Q21 (added) Flag changes on a set of services since a time (a flag change is a new HAS_FLAG edge), with the value it\n# replaced: the closed edge that ends exactly when the new one begins.
 Q21_RECENT_FLAG_CHANGES = """
 MATCH (s:Service)-[h:HAS_FLAG]->(f:ConfigFlag)
-WHERE s.name IN $names AND h.valid_from >= $since
-RETURN f.id AS flag_id, s.name AS service, f.key AS key, f.value AS value, h.valid_from AS at
+WHERE s.name IN $names AND h.valid_from >= $since AND f.reverted_at IS NULL AND h.revert IS NULL
+OPTIONAL MATCH (s)-[h0:HAS_FLAG]->(old:ConfigFlag)
+WHERE old.key = f.key AND h0.valid_to = h.valid_from
+RETURN f.id AS flag_id, s.name AS service, f.key AS key, f.value AS value, old.value AS previous, h.valid_from AS at
 ORDER BY at DESC
 """
 

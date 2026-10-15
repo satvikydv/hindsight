@@ -155,7 +155,7 @@ def test_markdown_export_reads_as_a_story(rig):
 def test_a_declined_fast_path_is_visible_in_the_trace(rig, monkeypatch):
     from api import config
     play(rig)
-    monkeypatch.setattr(config, "FAST_PATH_MIN_SIMILARITY", 0.0)
+    monkeypatch.setattr(config, "FAST_PATH_MIN_STRUCTURE", 0.0)
     step = lambda e: rig.w.truth(e.iid)["steps"][0]
     plans = std_plans()
     plans["remediator"] = [[("recent_changes", lambda e: {"service": e.origin})],

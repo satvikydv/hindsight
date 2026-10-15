@@ -69,6 +69,11 @@ def add_usage(g: TenantGraph, iid: str, steps: int = 0, tokens: int = 0, cost: f
             {"iid": iid, "steps": steps, "tokens": tokens, "cost": cost or 0.0, "ms": llm_ms})
 
 
+def set_signals(g: TenantGraph, iid: str, signals: list[str]) -> None:
+    """Cause-discriminating facts visible at triage time (see recall.compute_signals)."""
+    g.write("MATCH (i:Incident {id: $iid}) SET i.signals = $signals", {"iid": iid, "signals": signals})
+
+
 def set_signature(g: TenantGraph, iid: str, embedding: list[float]) -> None:
     g.write("MATCH (i:Incident {id: $iid}) SET i.signature_embedding = vecf32($vec)",
             {"iid": iid, "vec": embedding})

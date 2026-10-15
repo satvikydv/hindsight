@@ -50,7 +50,7 @@ def infer_fault_class(seq: list[dict], datastores: set[str]) -> str:
     return "other:" + "+".join(tools)
 
 
-def templatize(step: dict, origin: str, datastores: set[str]) -> dict:
+def templatize(step: dict, origin: str, datastores: set[str], top_caller: str | None = None) -> dict:
     """Replace this incident's concrete names with placeholders so the playbook transfers to other services."""
     tool, args = step["tool"], step["args"]
     out = {}
@@ -59,6 +59,8 @@ def templatize(step: dict, origin: str, datastores: set[str]) -> dict:
             out[k] = "$changed_flag"
         elif tool == "set_flag" and k == "value":
             out[k] = "$previous_value"
+        elif tool == "restart" and top_caller and v == top_caller:
+            out[k] = "$top_caller"      # the service the saturated datastore hurts most: not a fixed name
         elif v == origin:
             out[k] = "$origin"
         elif v in datastores:
@@ -66,6 +68,13 @@ def templatize(step: dict, origin: str, datastores: set[str]) -> dict:
         else:
             out[k] = v
     return {"tool": tool, "args_template": out}
+
+
+def top_caller_of(view: dict, datastores: set[str]) -> str | None:
+    """The service with the worst latency in this incident (where a connection-pool problem hurts most), or None."""
+    lat = [(s["value"], s["service"]) for s in view["symptoms"]
+           if s["kind"] == "latency" and s["service"] not in datastores and s["value"] is not None]
+    return max(lat)[1] if lat else None
 
 
 def _followed_playbook(g: TenantGraph, iid: str) -> str | None:
@@ -146,7 +155,8 @@ def consolidate(g: TenantGraph, embedder: Embedder | None, iid: str, at: int) ->
         followed_ok = False
 
     if resolved and seq and not followed_ok:
-        steps = [templatize(s, origin, datastores) for s in seq]
+        top = top_caller_of(view, datastores)
+        steps = [templatize(s, origin, datastores, top) for s in seq]
         dup = pr.find_duplicate(g, fault_class, steps)
         if dup:
             pr.reinforce(g, dup, True, at)

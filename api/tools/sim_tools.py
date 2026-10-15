@@ -3,6 +3,7 @@ Registered on import.
 """
 
 from api.memory import procedural as pr
+from api.sim.world import write_events
 from api.tools.base import Tool, ToolContext, register
 from api.tools.graph_tools import REMEDIATOR, STR
 
@@ -10,6 +11,8 @@ from api.tools.graph_tools import REMEDIATOR, STR
 def _act(tool: str, target_arg: str):
     def run(ctx: ToolContext, **args) -> dict:
         res = ctx.world.act(ctx.iid, tool, args[target_arg], args.get("value"))
+        if res.get("events"):                  # a revert: record it in the graph so history stays truthful
+            write_events(ctx.g, res["events"])
         return {"_outcome": res["outcome"], "detail": res["detail"], "target": args[target_arg]}
 
     return run

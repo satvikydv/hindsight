@@ -119,7 +119,7 @@ def test_second_similar_incident_takes_the_fast_path_and_reinforces_the_playbook
 def test_fast_path_that_does_not_apply_is_declined_without_harm_and_the_playbook_is_left_alone(rig, monkeypatch):
     from api import config
     play(rig)                                                        # learns "bad_deploy: rollback" on checkout-api
-    monkeypatch.setattr(config, "FAST_PATH_MIN_SIMILARITY", 0.0)     # force memory to over-reach on a different fault
+    monkeypatch.setattr(config, "FAST_PATH_MIN_STRUCTURE", 0.0)     # force memory to over-reach on a different fault
     flag_fix = lambda e: rig.w.truth(e.iid)["steps"][0]
     plans = std_plans()
     plans["remediator"] = [

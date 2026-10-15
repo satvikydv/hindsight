@@ -7,6 +7,7 @@ postmortem text of text-similar past incidents; `off` shows no past incidents at
 
 import json
 
+from api.agents.intake import strength
 from api.memory import episodic as ep
 from api.memory import procedural as pr
 from api.tools.base import ToolContext
@@ -50,8 +51,10 @@ def build_context(ctx: ToolContext, agent: str, notes: str = "") -> str:
          f"origin service: {origin}",
          "affected: " + ", ".join(f"{s['name']} ({s['role']}, {s['tier']})" for s in v["services"])]
 
+    # loudest first, so the cap drops the least informative symptoms, not whichever services sort last by name
+    loudest = sorted(v["symptoms"], key=lambda s: -strength(s))[:MAX_SYMPTOMS]
     by_node: dict[str, list[str]] = {}
-    for s in v["symptoms"][:MAX_SYMPTOMS]:
+    for s in loudest:
         by_node.setdefault(s["service"], []).append(f"{s['kind']}={s['value']}")
     L.append("symptoms: " + "; ".join(f"{n}: {', '.join(k)}" for n, k in by_node.items()))
 

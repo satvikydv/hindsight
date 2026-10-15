@@ -368,7 +368,8 @@ class World:
                     self.flag_values[target] = step["value"]
                 if f.progress == len(f.steps):
                     f.clear_tick = self.tick  # symptoms clear within one tick of the last correct step
-                return {"outcome": "success", "detail": f"{tool}({target}) applied", "tick": self.tick}
+                return {"outcome": "success", "detail": f"{tool}({target}) applied", "tick": self.tick,
+                        "events": self._revert_events(f, tool, target, step)}
         harmful_gateway = tool in ("restart", "failover", "rollback") and target == "api-gateway"
         harmful_rollback = (tool == "rollback" and target in self.c.services
                             and self.c.services[target]["tier"] == "critical" and target in self.latest_deploy)
@@ -377,6 +378,46 @@ class World:
                 f.harm += 1
             return {"outcome": "harmful", "detail": f"{tool}({target}) made things worse", "tick": self.tick}
         return {"outcome": "no_effect", "detail": f"{tool}({target}) had no effect", "tick": self.tick}
+
+    def _revert_events(self, f: Fault, tool: str, target: str, step: dict) -> list[dict]:
+        """Graph events for a fix that undoes the injected change, so the graph stops presenting a reverted deploy or
+        flag as a live recent change (later incidents would otherwise chase it)."""
+        if tool == "rollback":
+            did = self.latest_deploy.get(target)
+            if did and any(rc["label"] == "Deploy" and rc["id"] == did for rc in f.root_cause):
+                f.extra.setdefault("reverted", []).append(did)
+                return [{"type": "deploy_reverted", "id": did, "at": self.now_ms}]
+        if tool == "set_flag":
+            owner = self.c.flags[target]["service"]
+            f.extra.setdefault("reverted", []).append(target)
+            return [{"type": "flag_reverted", "key": target, "service": owner, "value": step["value"],
+                     "id": self._ulid(), "at": self.now_ms}]
+        return []
+
+    def settle(self, incident_id: str) -> list[dict]:
+        """The incident is over. Whatever the crew did not fix is cleaned up by the humans it escalated to (a failed
+        incident) or by the team after a flaky blip (a self-healed one): the fault is cleared and any injected deploy
+        or flag change still standing is reverted. Without this, one incident's leftovers show up as live evidence in the
+        next incident's graph. Returns graph events to write; safe to call twice."""
+        f = self.faults.get(incident_id)
+        if f is None:
+            return []
+        events = []
+        done = set(f.extra.get("reverted", []))
+        for rc in f.root_cause:
+            if rc["label"] == "Deploy" and rc["id"] not in done:
+                events.append({"type": "deploy_reverted", "id": rc["id"], "at": self.now_ms})
+                done.add(rc["id"])
+            elif rc["label"] == "ConfigFlag" and rc["key"] not in done:
+                original = next(s["value"] for s in f.steps if s["tool"] == "set_flag" and s["target"] == rc["key"])
+                self.flag_values[rc["key"]] = original
+                events.append({"type": "flag_reverted", "key": rc["key"], "service": rc["service"], "value": original,
+                               "id": self._ulid(), "at": self.now_ms})
+                done.add(rc["key"])
+        f.extra["reverted"] = sorted(done)
+        if f.clear_tick is None:
+            f.clear_tick = self.tick
+        return events
 
     # ---- benchmark-only --------------------------------------------------------------------------------------
     def truth(self, incident_id: str) -> dict:
@@ -396,6 +437,14 @@ def write_events(g: TenantGraph, events: list[dict]) -> None:
                     "CREATE (d)-[:DEPLOYED]->(s) CREATE (p)-[:AUTHORED]->(d)",
                     {"svc": ev["service"], "author": ev["author"], "id": ev["id"], "version": ev["version"],
                      "at": ev["at"], "diff": ev["diff_summary"], "flags": ev["flags_changed"]})
+        elif ev["type"] == "deploy_reverted":
+            g.write("MATCH (d:Deploy {id: $id}) SET d.reverted_at = $at", {"id": ev["id"], "at": ev["at"]})
+        elif ev["type"] == "flag_reverted":
+            g.write("MATCH (s:Service {name: $svc})-[h:HAS_FLAG]->(bad:ConfigFlag {key: $key}) "
+                    "WHERE h.valid_to IS NULL SET h.valid_to = $at, bad.reverted_at = $at "
+                    "CREATE (n:ConfigFlag {id: $id, key: $key, value: $value, created_at: $at, source: 'sim'}) "
+                    "CREATE (s)-[:HAS_FLAG {valid_from: $at, revert: true}]->(n)",
+                    {"svc": ev["service"], "key": ev["key"], "id": ev["id"], "value": ev["value"], "at": ev["at"]})
         elif ev["type"] == "flag_change":
             g.write("MATCH (s:Service {name: $svc})-[h:HAS_FLAG]->(:ConfigFlag {key: $key}) "
                     "WHERE h.valid_to IS NULL SET h.valid_to = $at "
