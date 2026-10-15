@@ -162,6 +162,19 @@ def test_cascading_incident_with_two_root_causes_appears_once_with_both_cause_ty
     assert len(hits) == 1 and sorted(hits[0]["cause_types"]) == ["Datastore", "Deploy"]
 
 
+def test_an_incident_whose_cause_was_never_confirmed_is_still_recalled_by_its_shape(g):
+    """Found live: the Investigator sometimes forgets confirm_root_cause. That must not hide the incident."""
+    past = make_incident(g, "checkout-api errors after deploy", "checkout-api",
+                         [("checkout-api", "error_rate"), ("api-gateway", "error_rate")])
+    ep.set_status(g, past, "resolved", SIM_NOW)                       # resolved, but no ROOT_CAUSE edge
+    cur = make_incident(g, "payment refunds are failing", "refund-api",
+                        [("refund-api", "error_rate"), ("api-gateway", "error_rate")])
+    r = rc.recall_similar(g, emb, cur, NOW, "graph")
+    assert [s["incident"] for s in r.similar] == [past]
+    assert r.similar[0]["basis"] == "both" and r.similar[0]["parts"]["structural"] > 0.5
+    assert r.similar[0]["cause_types"] == []                          # unknown, not an error
+
+
 def test_signature_text_contains_title_and_symptoms(g, story):
     text = rc.signature_text(ep.incident_view(g, story["cur"]))
     assert text.startswith("payment refunds are failing. symptoms:") and "error_rate on api-gateway" in text

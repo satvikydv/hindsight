@@ -65,7 +65,8 @@ def _structural(g: TenantGraph, iid: str) -> dict[str, dict]:
     for r in rows:  # a cascading incident has two ROOT_CAUSE edges and so two rows: keep the best, list both cause types
         cur = out.setdefault(r["incident"], {"jaccard": r["symptomJaccard"], "same_domain": bool(r["sameDomain"]),
                                              "same_tier": bool(r["sameTier"]), "cause_types": []})
-        cur["cause_types"].append(r["causeType"])
+        if r["causeType"]:
+            cur["cause_types"].append(r["causeType"])
     if not out:
         return {}
     deps = {r["incident"]: set(r["deps"]) for r in g.rows(q.Q17_ORIGIN_DEPENDENCIES, {"ids": [iid, *out]})}

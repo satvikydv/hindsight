@@ -37,12 +37,39 @@ class ToolCall:
     args_error: str | None = None  # set when the model sent arguments that were not valid JSON
 
 
+# USD per 1M tokens: (input, cached input, output). From OpenAI's pricing pages; update when prices or models change.
+PRICES = {"gpt-4.1": (2.00, 0.50, 8.00), "gpt-4.1-mini": (0.40, 0.10, 1.60)}
+
+
+def cost_usd(model: str, prompt_tokens: int, cached_tokens: int, completion_tokens: int) -> float | None:
+    """Dollar cost of one call, or None if the model is not in the price table (so totals never silently invent a price)."""
+    key = model if model in PRICES else next((m for m in sorted(PRICES, key=len, reverse=True)
+                                              if model.startswith(m)), None)
+    if key is None:
+        return None
+    p_in, p_cached, p_out = PRICES[key]
+    return ((prompt_tokens - cached_tokens) * p_in + cached_tokens * p_cached + completion_tokens * p_out) / 1e6
+
+
 @dataclass
 class LLMResult:
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
-    tokens: int = 0
-    cached: bool = False
+    tokens: int = 0                     # total tokens billed for this call (0 when replayed from the disk cache)
+    cached: bool = False                # True when replayed from the on-disk prompt cache: no API call, no cost
+    model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cached_prompt_tokens: int = 0       # prompt tokens served from OpenAI's prompt cache (billed at the cached rate)
+    latency_ms: int = 0
+    cost_usd: float | None = 0.0
+
+    @property
+    def usage(self) -> dict:
+        """Telemetry stored on the assistant Message so any call can be traced and priced later."""
+        return {"model": self.model, "prompt_tokens": self.prompt_tokens, "completion_tokens": self.completion_tokens,
+                "cached_tokens": self.cached_prompt_tokens, "latency_ms": self.latency_ms,
+                "cost_usd": self.cost_usd, "disk_cache": self.cached}
 
     @property
     def assistant_message(self) -> dict:
@@ -94,6 +121,7 @@ class OpenAILLM:
             kwargs["tools"] = tools
         retryable = (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
                      openai.InternalServerError)
+        started = time.monotonic()
         for attempt in range(len(RETRY_DELAYS) + 1):
             try:
                 resp = self._client.chat.completions.create(**kwargs)
@@ -102,8 +130,16 @@ class OpenAILLM:
                 if attempt == len(RETRY_DELAYS):
                     raise LLMUnavailable(f"{type(e).__name__} after {attempt + 1} tries") from e
                 time.sleep(RETRY_DELAYS[attempt])
+        latency_ms = int((time.monotonic() - started) * 1000)
         msg = resp.choices[0].message
-        raw = {"content": msg.content, "tokens": resp.usage.total_tokens if resp.usage else 0,
+        u = resp.usage
+        total = u.total_tokens if u else 0
+        prompt = getattr(u, "prompt_tokens", None)
+        prompt = total if prompt is None else prompt            # only a total reported: price it all as input
+        raw = {"content": msg.content, "tokens": total, "model": model, "prompt_tokens": prompt,
+               "completion_tokens": total - prompt,
+               "cached_tokens": getattr(getattr(u, "prompt_tokens_details", None), "cached_tokens", 0) or 0,
+               "latency_ms": latency_ms,
                "tool_calls": [{"id": t.id, "name": t.function.name, "arguments": t.function.arguments}
                               for t in (msg.tool_calls or [])]}
         if self._cache:
@@ -122,7 +158,13 @@ def _decode(raw: dict, cached: bool = False) -> LLMResult:
         except json.JSONDecodeError as e:
             args, err = {}, f"invalid JSON arguments: {e}"
         calls.append(ToolCall(t["id"], t["name"], args, err))
-    return LLMResult(raw["content"], calls, 0 if cached else raw["tokens"], cached)
+    model = raw.get("model", "")
+    if cached:  # replayed from disk: nothing was billed, so report no tokens and no cost
+        return LLMResult(raw["content"], calls, 0, True, model, 0, 0, 0, 0, 0.0)
+    prompt, completion = raw.get("prompt_tokens", raw["tokens"]), raw.get("completion_tokens", 0)
+    ctok = raw.get("cached_tokens", 0)
+    return LLMResult(raw["content"], calls, raw["tokens"], False, model, prompt, completion, ctok,
+                     raw.get("latency_ms", 0), cost_usd(model, prompt, ctok, completion) if model else None)
 
 
 class OpenAIEmbedder:
@@ -180,4 +222,9 @@ class ScriptedLLM:
         self.calls += 1
         r = self.policy(tier, messages, tools)
         r.tokens = r.tokens or self.tokens_per_call
+        if not r.model:  # report usage as the real thing would: 90% input, priced from the real table
+            r.model = config.MODEL_STRONG if tier == "strong" else config.MODEL_FAST
+            r.prompt_tokens = int(r.tokens * 0.9)
+            r.completion_tokens = r.tokens - r.prompt_tokens
+            r.cost_usd = cost_usd(r.model, r.prompt_tokens, 0, r.completion_tokens)
         return r

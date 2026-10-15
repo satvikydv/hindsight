@@ -43,10 +43,30 @@ def set_severity(g: TenantGraph, iid: str, severity: str) -> None:
     g.write("MATCH (i:Incident {id: $iid}) SET i.severity = $sev", {"iid": iid, "sev": severity})
 
 
-def add_usage(g: TenantGraph, iid: str, steps: int = 0, tokens: int = 0) -> None:
-    """Running step and token counts, read back for the learning-curve chart."""
-    g.write("MATCH (i:Incident {id: $iid}) SET i.steps = i.steps + $steps, i.tokens = i.tokens + $tokens",
-            {"iid": iid, "steps": steps, "tokens": tokens})
+def set_fast_path(g: TenantGraph, iid: str, playbook_id: str) -> None:
+    """Remember which playbook the coordinator told the Remediator to follow, for the Scribe to reinforce."""
+    g.write("MATCH (i:Incident {id: $iid}) SET i.fast_path_playbook = $pid", {"iid": iid, "pid": playbook_id})
+
+
+def decline_fast_path(g: TenantGraph, iid: str) -> None:
+    """The Remediator checked the playbook's precondition, found it did not hold and took no action. Stop treating the
+    playbook as followed, so the Scribe neither rewards nor penalises it (it was never tried)."""
+    g.write("MATCH (i:Incident {id: $iid}) SET i.fast_path_declined = i.fast_path_playbook "
+            "REMOVE i.fast_path_playbook", {"iid": iid})
+
+
+def mark_resolution_cost(g: TenantGraph, iid: str) -> None:
+    """Freeze steps and tokens at the moment the incident ends, before the Scribe adds its own: the learning curve
+    measures the cost of resolving, not of writing it up."""
+    g.write("MATCH (i:Incident {id: $iid}) SET i.steps_to_resolve = i.steps, i.tokens_to_resolve = i.tokens, "
+            "i.cost_to_resolve = coalesce(i.cost_usd, 0.0)", {"iid": iid})
+
+
+def add_usage(g: TenantGraph, iid: str, steps: int = 0, tokens: int = 0, cost: float = 0.0, llm_ms: int = 0) -> None:
+    """Running step, token, dollar and LLM-latency totals, read back for the learning-curve chart and cost reports."""
+    g.write("MATCH (i:Incident {id: $iid}) SET i.steps = i.steps + $steps, i.tokens = i.tokens + $tokens, "
+            "i.cost_usd = coalesce(i.cost_usd, 0.0) + $cost, i.llm_ms = coalesce(i.llm_ms, 0) + $ms",
+            {"iid": iid, "steps": steps, "tokens": tokens, "cost": cost or 0.0, "ms": llm_ms})
 
 
 def set_signature(g: TenantGraph, iid: str, embedding: list[float]) -> None:
@@ -126,15 +146,27 @@ def confirm_root_cause(g: TenantGraph, iid: str, label: str, node_id: str, confi
 
 
 def add_message(g: TenantGraph, iid: str, msg_id: str, agent: str, role: str, content: str, seq: int,
-                at: int) -> None:
-    """One LLM turn, kept so a crashed incident can reload its conversation from the graph."""
+                at: int, usage: dict | None = None) -> None:
+    """One LLM turn, kept so a crashed incident can reload its conversation from the graph. `usage` (assistant messages
+    only) is the call's telemetry: model, tokens, latency, cost. That is what makes every call traceable and priceable."""
+    u = usage or {}
     g.write("MATCH (i:Incident {id: $iid}) "
             "MERGE (m:Message {id: $mid}) "
             "ON CREATE SET m.agent = $agent, m.role = $role, m.content = $content, m.at = $at, "
-            "m.created_at = $at, m.source = 'agent' "
+            "m.created_at = $at, m.source = 'agent', m.model = $model, m.prompt_tokens = $pt, "
+            "m.completion_tokens = $ct, m.cached_tokens = $cached, m.latency_ms = $ms, m.cost_usd = $cost, "
+            "m.disk_cache = $disk "
             "MERGE (m)-[l:IN_LOG]->(i) SET l.seq = $seq",
             {"iid": iid, "mid": msg_id, "agent": agent, "role": role, "content": content[:MAX_MESSAGE_CHARS],
-             "at": at, "seq": seq})
+             "at": at, "seq": seq, "model": u.get("model"), "pt": u.get("prompt_tokens"),
+             "ct": u.get("completion_tokens"), "cached": u.get("cached_tokens"), "ms": u.get("latency_ms"),
+             "cost": u.get("cost_usd"), "disk": u.get("disk_cache")})
+
+
+def link_message_action(g: TenantGraph, msg_id: str, action_id: str) -> None:
+    """(Message)-[:LED_TO]->(Action): the LLM turn whose reasoning produced this action."""
+    g.write("MATCH (m:Message {id: $mid}) MATCH (a:Action {id: $aid}) MERGE (m)-[:LED_TO]->(a)",
+            {"mid": msg_id, "aid": action_id})
 
 
 def load_messages(g: TenantGraph, iid: str, n: int = 10) -> list[dict]:
@@ -179,7 +211,8 @@ def incident_view(g: TenantGraph, iid: str) -> dict | None:
     """The incident subgraph as plain data: the agents' blackboard and the body of GET /incidents/{id}."""
     head = g.rows("MATCH (i:Incident {id: $iid}) RETURN i.id AS id, i.title AS title, i.severity AS severity, "
                   "i.status AS status, i.opened_at AS opened_at, i.resolved_at AS resolved_at, "
-                  "i.steps AS steps, i.tokens AS tokens, i.status_reason AS reason", {"iid": iid})
+                  "i.steps AS steps, i.tokens AS tokens, i.status_reason AS reason, i.cost_usd AS cost_usd",
+                  {"iid": iid})
     if not head:
         return None
     p = {"iid": iid}

@@ -127,6 +127,60 @@ def test_cache_returns_identical_prompts_without_calling_the_api(tmp_path, monke
     assert OpenAILLM(client=StubClient([reply("nocache")]), cache=False).chat("fast", msgs, []).content == "nocache"
 
 
+def detailed(content="ok", prompt=1000, cached=400, completion=100):
+    usage = SimpleNamespace(total_tokens=prompt + completion, prompt_tokens=prompt, completion_tokens=completion,
+                            prompt_tokens_details=SimpleNamespace(cached_tokens=cached))
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None))],
+                           usage=usage)
+
+
+def test_usage_split_latency_and_cost_are_captured_per_call(monkeypatch):
+    monkeypatch.setattr(config, "MODEL_STRONG", "gpt-4.1")
+    monkeypatch.setattr(config, "MODEL_FAST", "gpt-4.1-mini")
+    strong = OpenAILLM(client=StubClient([detailed()])).chat("strong", [], [])
+    # 600 uncached input x $2.00 + 400 cached input x $0.50 + 100 output x $8.00, per 1M tokens
+    assert (strong.model, strong.prompt_tokens, strong.cached_prompt_tokens, strong.completion_tokens) == (
+        "gpt-4.1", 1000, 400, 100)
+    assert strong.cost_usd == pytest.approx((600 * 2.00 + 400 * 0.50 + 100 * 8.00) / 1e6)
+    fast = OpenAILLM(client=StubClient([detailed()])).chat("fast", [], [])
+    assert fast.cost_usd == pytest.approx((600 * 0.40 + 400 * 0.10 + 100 * 1.60) / 1e6)
+    assert strong.latency_ms >= 0 and strong.usage["cost_usd"] == strong.cost_usd and strong.usage["model"] == "gpt-4.1"
+
+
+def test_cost_usd_handles_dated_model_names_and_never_invents_a_price():
+    assert llm.cost_usd("gpt-4.1-2025-04-14", 1_000_000, 0, 0) == pytest.approx(2.00)
+    assert llm.cost_usd("gpt-4.1-mini-2025-04-14", 1_000_000, 0, 0) == pytest.approx(0.40)   # not mistaken for gpt-4.1
+    assert llm.cost_usd("some-future-model", 1000, 0, 100) is None
+
+
+def test_a_response_that_reports_only_a_total_is_priced_as_all_input(monkeypatch):
+    monkeypatch.setattr(config, "MODEL_FAST", "gpt-4.1-mini")
+    r = OpenAILLM(client=StubClient([reply(tokens=1000)])).chat("fast", [], [])
+    assert (r.prompt_tokens, r.completion_tokens) == (1000, 0) and r.cost_usd == pytest.approx(1000 * 0.40 / 1e6)
+
+
+def test_unknown_model_is_flagged_unpriced_not_zero(monkeypatch):
+    monkeypatch.setattr(config, "MODEL_FAST", "mystery-model")
+    assert OpenAILLM(client=StubClient([detailed()])).chat("fast", [], []).cost_usd is None
+
+
+def test_a_disk_cache_replay_reports_no_tokens_and_no_cost(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "CACHE_DIR", tmp_path)
+    monkeypatch.setattr(config, "MODEL_FAST", "gpt-4.1-mini")
+    model = OpenAILLM(client=StubClient([detailed()]), cache=True)
+    first = model.chat("fast", [{"role": "user", "content": "x"}], [])
+    again = model.chat("fast", [{"role": "user", "content": "x"}], [])
+    assert first.cost_usd > 0 and first.tokens == 1100
+    assert (again.cached, again.tokens, again.cost_usd, again.prompt_tokens) == (True, 0, 0.0, 0)
+    assert again.usage["disk_cache"] is True
+
+
+def test_scripted_llm_reports_priced_usage_like_the_real_thing():
+    r = ScriptedLLM(lambda t, m, tools: LLMResult("hi"), tokens_per_call=100).chat("strong", [], [])
+    assert (r.prompt_tokens, r.completion_tokens) == (90, 10)
+    assert r.cost_usd == pytest.approx((90 * 2.00 + 10 * 8.00) / 1e6)
+
+
 @pytest.mark.live
 @pytest.mark.skipif(not config.LLM_API_KEY, reason="no OPENAI key in .env")
 def test_live_function_calling_and_embeddings():

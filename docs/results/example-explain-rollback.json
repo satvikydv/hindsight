@@ -1,0 +1,157 @@
+{
+  "action": {
+    "id": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+    "seq": 5,
+    "agent": "remediator",
+    "tool": "rollback",
+    "args": {
+      "service": "refund-api"
+    },
+    "outcome": "success",
+    "summary": "{\"detail\":\"rollback(refund-api) applied\",\"target\":\"refund-api\"}",
+    "at": 1790817120000,
+    "rationale": ""
+  },
+  "incident": "01M4ZC5X38GVM3YEC18G7G88SG",
+  "reasoning": {
+    "id": "01M4ZC68JBGXD5JGSZZ9YNW18D",
+    "agent": "remediator",
+    "content": "rollback({\"service\": \"refund-api\"})",
+    "model": "gpt-4.1",
+    "prompt_tokens": 1637,
+    "completion_tokens": 14,
+    "cached_tokens": 1408,
+    "latency_ms": 2203,
+    "cost_usd": 0.001274,
+    "disk_cache": false,
+    "actions_in_turn": 1
+  },
+  "evidence": [
+    {
+      "label": "Service",
+      "id": "3D5MYAVCV6KJYN1RB5WGT297CB",
+      "name": "refund-api",
+      "why": "remediation target"
+    }
+  ],
+  "supporting_hypotheses": [],
+  "memory_path": {
+    "playbook": {
+      "id": "01M4ZC5SQ87CJ0BQE0VH5EKSTC",
+      "name": "bad_deploy: rollback",
+      "weight": 0.75,
+      "status": "active"
+    },
+    "similar_incidents": [
+      {
+        "incident": "01M4ZC56RZD8WJX6M5492SBTJS",
+        "title": "checkout-api: error_rate alert",
+        "score": 0.7229,
+        "basis": "both",
+        "playbook": "bad_deploy: rollback",
+        "weight": 0.75,
+        "status": "active"
+      }
+    ],
+    "step": {
+      "id": "01M4ZC5SQASBX5ZRGX8X999BWA",
+      "step": 1,
+      "args": "{\"service\": \"$origin\"}"
+    }
+  },
+  "system_initiated": false,
+  "note": null,
+  "subgraph": {
+    "nodes": [
+      {
+        "id": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+        "label": "Action",
+        "name": "rollback"
+      },
+      {
+        "id": "01M4ZC5X38GVM3YEC18G7G88SG",
+        "label": "Incident",
+        "name": "refund-api: error_rate alert"
+      },
+      {
+        "id": "agent:remediator",
+        "label": "Agent",
+        "name": "remediator"
+      },
+      {
+        "id": "3D5MYAVCV6KJYN1RB5WGT297CB",
+        "label": "Service",
+        "name": "refund-api"
+      },
+      {
+        "id": "01M4ZC68JBGXD5JGSZZ9YNW18D",
+        "label": "Message",
+        "name": "remediator turn"
+      },
+      {
+        "id": "01M4ZC5SQ87CJ0BQE0VH5EKSTC",
+        "label": "Playbook",
+        "name": "bad_deploy: rollback"
+      },
+      {
+        "id": "01M4ZC56RZD8WJX6M5492SBTJS",
+        "label": "Incident",
+        "name": "checkout-api: error_rate alert"
+      },
+      {
+        "id": "01M4ZC5SQASBX5ZRGX8X999BWA",
+        "label": "Step",
+        "name": "step 1: rollback"
+      }
+    ],
+    "edges": [
+      {
+        "from": "01M4ZC5X38GVM3YEC18G7G88SG",
+        "to": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+        "type": "TOOK"
+      },
+      {
+        "from": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+        "to": "agent:remediator",
+        "type": "BY"
+      },
+      {
+        "from": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+        "to": "3D5MYAVCV6KJYN1RB5WGT297CB",
+        "type": "CITED",
+        "why": "remediation target"
+      },
+      {
+        "from": "01M4ZC68JBGXD5JGSZZ9YNW18D",
+        "to": "01M4ZC68JCC2A70F4JR6NZ2A8W",
+        "type": "LED_TO"
+      },
+      {
+        "from": "01M4ZC5X38GVM3YEC18G7G88SG",
+        "to": "01M4ZC56RZD8WJX6M5492SBTJS",
+        "type": "SIMILAR_TO",
+        "why": "score 0.7229 (both)"
+      },
+      {
+        "from": "01M4ZC56RZD8WJX6M5492SBTJS",
+        "to": "01M4ZC5SQ87CJ0BQE0VH5EKSTC",
+        "type": "RESOLVED_BY"
+      },
+      {
+        "from": "01M4ZC5SQ87CJ0BQE0VH5EKSTC",
+        "to": "01M4ZC5SQASBX5ZRGX8X999BWA",
+        "type": "HAS_STEP"
+      }
+    ]
+  },
+  "highlight": [
+    "01M4ZC68JCC2A70F4JR6NZ2A8W",
+    "01M4ZC5X38GVM3YEC18G7G88SG",
+    "agent:remediator",
+    "3D5MYAVCV6KJYN1RB5WGT297CB",
+    "01M4ZC68JBGXD5JGSZZ9YNW18D",
+    "01M4ZC5SQ87CJ0BQE0VH5EKSTC",
+    "01M4ZC56RZD8WJX6M5492SBTJS",
+    "01M4ZC5SQASBX5ZRGX8X999BWA"
+  ]
+}

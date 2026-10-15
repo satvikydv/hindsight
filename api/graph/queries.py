@@ -30,7 +30,9 @@ CALL algo.pageRank('Service', 'DEPENDS_ON') YIELD node, score
 SET node.pagerank = score
 """
 
-# Q4 Structural recall: past resolved incidents with the same shape (symptom overlap, domain, tier, cause type)
+# Q4 Structural recall: past resolved incidents with the same shape (symptom overlap, domain, tier, cause type).
+# ROOT_CAUSE is OPTIONAL (the PRD requires it): the current cause is unknown at recall time so it is only a hint, and an
+# incident whose Investigator never confirmed a cause must still be recallable by its shape.
 Q4_STRUCTURAL_RECALL = """
 MATCH (cur:Incident {id: $iid})-[:SHOWED]->(cs:Symptom)
 WITH cur, collect(DISTINCT cs.kind) AS curKinds
@@ -39,7 +41,7 @@ MATCH (past:Incident)-[:AFFECTS {role: 'origin'}]->(po:Service)
 WHERE past.status = 'resolved' AND past.id <> cur.id
 MATCH (past)-[:SHOWED]->(ps:Symptom)
 WITH cur, curKinds, co, past, po, collect(DISTINCT ps.kind) AS pastKinds
-MATCH (past)-[:ROOT_CAUSE]->(rc)
+OPTIONAL MATCH (past)-[:ROOT_CAUSE]->(rc)
 WITH past, po, co, labels(rc)[0] AS causeType,
      size([k IN curKinds WHERE k IN pastKinds]) AS overlap,
      size(curKinds) + size(pastKinds) AS total

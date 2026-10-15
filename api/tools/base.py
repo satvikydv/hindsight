@@ -147,8 +147,10 @@ def _summary(result: dict) -> str:
                       separators=(",", ":"))[:300]
 
 
-def execute(ctx: ToolContext, agent: str, name: str, args: dict, seq: int, rationale: str = "") -> ToolOutcome:
-    """Run one tool call end to end. Always leaves an Action in the graph, even for rejected or failed calls."""
+def execute(ctx: ToolContext, agent: str, name: str, args: dict, seq: int, rationale: str = "",
+            args_error: str | None = None) -> ToolOutcome:
+    """Run one tool call end to end. Always leaves an Action in the graph, even for rejected or failed calls.
+    `args_error` is set when the model's arguments were not valid JSON: the call is recorded and rejected."""
     from api.tools import guardrails
 
     action_id = new_id()
@@ -162,6 +164,8 @@ def execute(ctx: ToolContext, agent: str, name: str, args: dict, seq: int, ratio
         payload = {"error": msg}
         return ToolOutcome(name, outcome, payload, wrap_untrusted(name, payload), action_id)
 
+    if args_error:
+        return fail(f"could not parse arguments for {name}: {args_error}")
     if tool is None or agent not in tool.agents:
         return fail(f"unknown tool {name!r}; available: {sorted(n for n, t in REGISTRY.items() if agent in t.agents)}")
     bad = validate(tool, args)

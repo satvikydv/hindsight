@@ -60,6 +60,9 @@ def test_every_schema_is_openai_valid_and_each_agent_has_tools():
         assert schemas_for(agent)
     assert {s["function"]["name"] for s in schemas_for("remediator")} >= {"rollback", "check_health", "playbook_steps"}
     assert "rollback" not in {s["function"]["name"] for s in schemas_for("triage")}
+    # the Remediator can verify a playbook's precondition before it acts, but cannot rank or confirm causes
+    names = {s["function"]["name"] for s in schemas_for("remediator")}
+    assert {"recent_changes", "get_metrics"} <= names and not names & {"rank_suspects", "confirm_root_cause"}
 
 
 @pytest.mark.parametrize("args,msg", [

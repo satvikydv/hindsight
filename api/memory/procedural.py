@@ -43,6 +43,12 @@ def create_playbook(g: TenantGraph, name: str, fault_class: str, steps: list[dic
     return pid
 
 
+def link_resolution(g: TenantGraph, iid: str, pid: str) -> None:
+    """Incident -[:RESOLVED_BY]-> Playbook (create_playbook already does this for a brand-new playbook)."""
+    g.write("MATCH (i:Incident {id: $iid}) MATCH (pb:Playbook {id: $pid}) MERGE (i)-[:RESOLVED_BY]->(pb)",
+            {"iid": iid, "pid": pid})
+
+
 def steps_of(g: TenantGraph, pid: str) -> list[dict]:
     """Q7. Each step: {step, tool, args (dict), wins, tries}."""
     rows = g.rows(q.Q7_PLAYBOOK_STEPS, {"pid": pid})
