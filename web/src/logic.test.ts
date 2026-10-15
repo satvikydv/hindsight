@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { parseSSE } from './sse'
-import { argsLine, buildTimeline, summarize, toneOf } from './timeline'
+import { describe, expect, it, vi } from 'vitest'
+import { parseSSE, streamIncident } from './sse'
+import { argsLine, buildTimeline, pipeline, summarize, toneOf } from './timeline'
 
 const frame = (id: number, event: string, data: object) => `id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 
@@ -65,6 +65,33 @@ describe('buildTimeline', () => {
   })
 })
 
+describe('pipeline', () => {
+  const ev = (id: number, event: string, data: object) => ({ id, event, data })
+  const triage = [ev(1, 'agent_started', { agent: 'triage' }), ev(2, 'tool_called', { agent: 'triage', tool: 't', args: {} })]
+
+  it('marks the running agent active and earlier ones done', () => {
+    const p = pipeline(buildTimeline([...triage, ev(3, 'agent_started', { agent: 'investigator' })]), true)
+    expect(p.triage.state).toBe('done')
+    expect(p.investigator.state).toBe('active')
+    expect(p.remediator.state).toBe('idle')
+  })
+
+  it('shows the fast path as a skipped investigator', () => {
+    const p = pipeline(buildTimeline([...triage, ev(3, 'agent_started', { agent: 'remediator' })]), true)
+    expect(p.investigator.state).toBe('skipped')
+    expect(p.remediator.state).toBe('active')
+  })
+
+  it('counts bounce-backs and settles to done when the incident ends', () => {
+    const p = pipeline(buildTimeline([
+      ...triage, ev(3, 'agent_started', { agent: 'investigator' }), ev(4, 'agent_started', { agent: 'remediator' }),
+      ev(5, 'agent_started', { agent: 'investigator' }), ev(6, 'agent_started', { agent: 'scribe' }),
+    ]), false)
+    expect(p.investigator).toMatchObject({ state: 'done', turns: 2 })
+    expect(Object.values(p).every((s) => s.state === 'done')).toBe(true)
+  })
+})
+
 describe('display helpers', () => {
   it('maps outcomes to a tone, harmful and errors being the loud ones', () => {
     expect(toneOf('success')).toBe('ok')
@@ -88,5 +115,40 @@ describe('display helpers', () => {
   it('formats args compactly', () => {
     expect(argsLine({ service: 'checkout-api', n: 2 })).toBe('service=checkout-api, n=2')
     expect(argsLine(undefined)).toBe('')
+  })
+})
+
+describe('streamIncident', () => {
+  it('reconnects a connection that went silent, resuming after the last event', async () => {
+    vi.useFakeTimers()
+    const enc = new TextEncoder()
+    const seenIds: string[] = []
+    // like a browser, aborting the request errors its body stream
+    const body = (sig: AbortSignal, chunks: string[], close: boolean) => new ReadableStream({ start(c) {
+      chunks.forEach((x) => c.enqueue(enc.encode(x)))
+      if (close) c.close()
+      else sig.addEventListener('abort', () => c.error(new DOMException('aborted', 'AbortError')))
+    } })
+    const responses = [
+      (sig: AbortSignal) => body(sig, [frame(1, 'agent_started', { agent: 'triage' })], false),   // then silence, never closes
+      (sig: AbortSignal) => body(sig, [frame(2, 'stream_end', {})], true),
+    ]
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      seenIds.push((init.headers as Record<string, string>)['Last-Event-ID'])
+      return new Response(responses.shift()!(init.signal!), { status: 200 })
+    }))
+    const events: number[] = []
+    const states: string[] = []
+    const ctl = new AbortController()
+    streamIncident('/s', 'k', (e) => events.push(e.id), (s) => states.push(s), ctl.signal)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(events).toEqual([1])
+    await vi.advanceTimersByTimeAsync(40_000)     // silence past the watchdog, then the 1 s backoff
+    expect(events).toEqual([1, 2])
+    expect(seenIds).toEqual(['0', '1'])
+    expect(states).toContain('reconnecting')
+    expect(states.at(-1)).toBe('ended')
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
   })
 })

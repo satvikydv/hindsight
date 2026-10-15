@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { argsLine, Entry, summarize, toneOf } from '../timeline'
 import { useNow } from '../hooks'
+import Icon, { AGENT_ICON } from './Icons'
 
 const label = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
 
 export function AgentChip({ agent }: { agent: string | null | undefined }) {
   const a = agent || 'system'
-  return <span className={`chip agent-${a}`}>{label(a)}</span>
+  return <span className={`chip agent-${a}`}><Icon name={AGENT_ICON[a] ?? 'bolt'} size={12} />{label(a)}</span>
 }
 
 interface Props {
@@ -42,27 +43,31 @@ export default function Timeline({ entries, running, selectedAction, onSelectAct
         switch (e.kind) {
           case 'agent':
             return (
-              <li key={e.key} className="tl-agent">
-                <AgentChip agent={e.agent} />
-                <span className="muted">took the turn</span>
+              <li key={e.key} className={`tl-agent agent-${e.agent}`}>
+                <span className="rail-node big"><Icon name={AGENT_ICON[e.agent] ?? 'bolt'} size={14} /></span>
+                <span className="agent-name">{label(e.agent)}</span><span className="muted">has the incident</span>
               </li>
             )
           case 'handoff':
             return (
               <li key={e.key} className="tl-handoff">
-                <div className="rule" />
-                <div className="handoff-body">
-                  <span><AgentChip agent={e.from} /> <span aria-hidden>→</span> <AgentChip agent={e.to} /></span>
-                  {e.summary && <p className="muted">{e.summary}</p>}
+                <span className="rail-node baton" aria-hidden><Icon name="arrow" size={12} /></span>
+                <div className="baton-card">
+                  <div className="baton-head"><AgentChip agent={e.from} /><span className="baton-line" aria-hidden /><AgentChip agent={e.to} /></div>
+                  {e.summary && <p>{e.summary}</p>}
                 </div>
               </li>
             )
           case 'state':
-            return <li key={e.key} className="tl-state">state: {e.state.toLowerCase()}</li>
+            return null
           case 'end':
             return (
               <li key={e.key} className={`tl-end ${e.status}`}>
-                {e.status === 'resolved' ? 'Resolved' : 'Failed'}{e.reason ? `: ${e.reason.replace(/_/g, ' ')}` : ''}
+                <span className="rail-node end"><Icon name={e.status === 'resolved' ? 'check' : 'x'} size={14} /></span>
+                <div>
+                  <b>{e.status === 'resolved' ? 'Incident resolved' : 'Crew could not resolve it'}</b>
+                  {e.reason && <span className="muted"> · {e.reason.replace(/_/g, ' ')}</span>}
+                </div>
               </li>
             )
           case 'call': {
@@ -71,26 +76,26 @@ export default function Timeline({ entries, running, selectedAction, onSelectAct
             const expanded = open.has(e.key)
             const secs = e.pending ? Math.max(0, Math.round((now - (seen.current.get(e.key) ?? now)) / 1000)) : 0
             return (
-              <li key={e.key} className={`tl-call tone-${tone}${selectable && selectedAction === e.actionId ? ' selected' : ''}`}>
-                <button
-                  className="call-main"
-                  disabled={!selectable}
-                  onClick={() => e.actionId && onSelectAction(e.actionId)}
-                  aria-label={`${e.tool}: show why`}
-                  title={selectable ? 'Show the graph path behind this action' : 'Waiting for the result'}
-                >
-                  <AgentChip agent={e.agent} />
-                  <span className="tool">{e.tool}</span>
-                  <span className="args muted">{argsLine(e.args)}</span>
-                  <span className={`badge tone-${tone}`}>
-                    {e.pending ? <><span className="spinner" aria-hidden /> running {secs}s</> : (e.outcome ?? 'done').replace('_', ' ')}
-                  </span>
-                </button>
-                {!e.pending && <p className="summary">{summarize(e.result)}</p>}
-                {!e.pending && e.result != null && (
-                  <button className="link" onClick={() => toggle(e.key)}>{expanded ? 'hide raw result' : 'raw result'}</button>
-                )}
-                {expanded && <pre className="raw">{JSON.stringify(e.result, null, 2)}</pre>}
+              <li key={e.key} className={`tl-call tone-${tone} agent-${e.agent}${selectable && selectedAction === e.actionId ? ' selected' : ''}`}>
+                <span className="rail-node" aria-hidden />
+                <div className="call-card">
+                  <button className="call-main" disabled={!selectable} onClick={() => e.actionId && onSelectAction(e.actionId)}
+                          aria-label={`${e.tool}: show why`} title={selectable ? 'Show the graph path behind this action' : 'Waiting for the result'}>
+                    <span className="tool">{e.tool}</span>
+                    <span className="args">{argsLine(e.args)}</span>
+                    <span className={`outcome tone-${tone}`}>
+                      {e.pending ? <><span className="spinner" aria-hidden /> {secs}s</> : (e.outcome ?? 'done').replace('_', ' ')}
+                    </span>
+                  </button>
+                  {!e.pending && <p className="summary">{summarize(e.result)}</p>}
+                  {!e.pending && (
+                    <div className="call-foot">
+                      {selectable && <button className="why-btn" onClick={() => onSelectAction(e.actionId!)}><Icon name="eye" size={13} /> why?</button>}
+                      {e.result != null && <button className="link small" onClick={() => toggle(e.key)}>{expanded ? 'hide raw' : 'raw'}</button>}
+                    </div>
+                  )}
+                  {expanded && <pre className="raw">{JSON.stringify(e.result, null, 2)}</pre>}
+                </div>
               </li>
             )
           }

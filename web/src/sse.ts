@@ -35,7 +35,9 @@ export function parseSSE(buffer: string): { events: SseEvent[]; rest: string } {
   return { events, rest }
 }
 
-export type StreamState = 'connecting' | 'open' | 'reconnecting' | 'ended' | 'error'
+const SILENCE_MS = 35_000
+
+export type StreamState ='connecting' | 'open' | 'reconnecting' | 'ended' | 'error'
 
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve) => {
@@ -58,9 +60,16 @@ export function streamIncident(
   void (async () => {
     let attempt = 0
     while (!signal.aborted) {
+      // The server sends a keepalive every ~15 s, so a silent connection is a dead one even if it never closed:
+      // abort it and reconnect from the last event seen.
+      const attemptCtl = new AbortController()
+      const stop = () => attemptCtl.abort()
+      signal.addEventListener('abort', stop, { once: true })
+      let watchdog = setTimeout(stop, SILENCE_MS)
+      const alive = () => { clearTimeout(watchdog); watchdog = setTimeout(stop, SILENCE_MS) }
       try {
         onState(attempt ? 'reconnecting' : 'connecting')
-        const r = await fetch(url, { headers: { 'X-Tenant-Key': key, 'Last-Event-ID': String(last) }, signal })
+        const r = await fetch(url, { headers: { 'X-Tenant-Key': key, 'Last-Event-ID': String(last) }, signal: attemptCtl.signal })
         if (!r.ok || !r.body) {
           if (r.status < 500 && r.status !== 429) return onState('error')   // 401/404: retrying cannot help
           throw new Error(`stream ${r.status}`)
@@ -73,6 +82,7 @@ export function streamIncident(
         for (;;) {
           const { done, value } = await reader.read()
           if (done) break
+          alive()
           buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
           const parsed = parseSSE(buf)
           buf = parsed.rest
@@ -85,6 +95,9 @@ export function streamIncident(
         }
       } catch {
         if (signal.aborted) return
+      } finally {
+        clearTimeout(watchdog)
+        signal.removeEventListener('abort', stop)
       }
       onState('reconnecting')
       await sleep(Math.min(1000 * 2 ** attempt++, 8000), signal)

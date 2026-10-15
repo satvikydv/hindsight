@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { API, ApiError, Catalog, Explain, IncidentRow, IncidentView, request, Trace } from '../api'
 import { useIncidentStream, useNow, usePoll } from '../hooks'
-import { buildTimeline } from '../timeline'
+import { buildTimeline, pipeline, STAGES } from '../timeline'
 import GraphPanel from './GraphPanel'
+import Icon, { AGENT_ICON } from './Icons'
 import IncidentList from './IncidentList'
 import InjectForm, { InjectRequest } from './InjectForm'
+import Pipeline, { Ring } from './Pipeline'
 import Timeline, { AgentChip } from './Timeline'
 
 const CANCEL_AFTER_S = 60
 const money = (v: number | null | undefined) => (v == null ? 'n/a' : `$${v.toFixed(4)}`)
+const fmtTime = (s: number) => (s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`)
 
 export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: () => void }) {
   const [catalog, setCatalog] = useState<Catalog | null>(null)
@@ -30,6 +33,7 @@ export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: 
   const entries = useMemo(() => buildTimeline(events), [events])
   const ended = events.some((e) => e.event === 'stream_end')     // not `resolved`: the Scribe still runs after it
   const running = !!selected && !ended && streamState !== 'error'
+  const stages = useMemo(() => pipeline(entries, running), [entries, running])
   const now = useNow(running)
   const elapsed = Math.round((now - startedAt) / 1000)
 
@@ -40,7 +44,7 @@ export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: 
 
   useEffect(() => {
     request<Catalog>('/catalog', tkey).then(setCatalog, fail)
-  }, [tkey])
+  }, [tkey])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshList = () => request<{ incidents: IncidentRow[] }>('/incidents?limit=50', tkey).then((r) => setRows(r.incidents), fail)
   const anyActive = !rows || rows.some((r) => r.status === 'queued' || r.status === 'running')
@@ -67,7 +71,7 @@ export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: 
       (e) => live && (fail(e), setExplainLoading(false)),
     )
     return () => { live = false }
-  }, [actionId, tkey])
+  }, [actionId, tkey])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const submit = async (req: InjectRequest) => {
     setBusy(true)
@@ -97,75 +101,105 @@ export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: 
   const status = view?.status ?? rows?.find((r) => r.id === selected)?.status ?? (running ? 'running' : '')
   const failed = status === 'failed'
   const out = trace?.outcome
+  const title = view?.title ?? rows?.find((r) => r.id === selected)?.title ?? 'incident'
 
   return (
     <div className={`console${graphOpen ? ' graph-open' : ''}`}>
       <aside className="col-left">
         <InjectForm catalog={catalog} busy={busy} onSubmit={submit} />
-        {error && <p className="error" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></p>}
+        {error && <p className="error toast" role="alert">{error} <button className="link" onClick={() => setError(null)}>dismiss</button></p>}
         <IncidentList rows={rows} selected={selected} onSelect={setSelected} catalog={catalog} busy={busy} onSubmit={submit} />
       </aside>
 
       <main className="col-center">
         {!selected ? (
-          <div className="placeholder"><h2>Select or inject an incident</h2>
-            <p className="muted">The crew's turns appear here live: which agent acted, with what tool, and how it went. Click any action to see the graph path behind it.</p></div>
+          <div className="placeholder">
+            <div className="placeholder-art" aria-hidden>
+              {STAGES.map((a) => <span key={a} className={`orb agent-${a}`}><Icon name={AGENT_ICON[a]} size={18} /></span>)}
+            </div>
+            <h2>The crew is standing by</h2>
+            <p className="muted">Trigger an incident on the left. Triage scopes it, the Investigator finds the cause, the Remediator
+              fixes it and the Scribe writes down what was learned. Click any action to see why it was taken.</p>
+          </div>
         ) : (
           <>
             <header className="inc-head">
-              <div>
-                <h2>{(view?.title ?? rows?.find((r) => r.id === selected)?.title ?? 'incident').replace(/_/g, ' ')}</h2>
-                <div className="meta">
-                  <span className={`badge st-${status}`}>{status || '…'}</span>
-                  {view?.severity && <span className="badge">sev {view.severity}</span>}
-                  {view?.mode && <span className="badge">memory: {view.mode}</span>}
-                  {out?.fast_path && <span className="badge fast" title="Followed a playbook from memory">fast path</span>}
-                  {out?.fast_path_declined && <span className="badge warn" title="The Remediator checked the evidence and the playbook did not apply">fast path declined</span>}
-                  {out?.unconfirmed_root_cause && <span className="badge warn">no confirmed root cause</span>}
-                  <span className="muted">{view?.steps ?? 0} steps · {(view?.tokens ?? 0).toLocaleString()} tokens · {money(trace?.cost.total_usd ?? view?.cost_usd)}</span>
+              <div className="inc-head-top">
+                <div className="inc-head-title">
+                  <span className={`status-dot big st-${status}${running ? ' pulse' : ''}`} aria-hidden />
+                  <div>
+                    <h2>{title}</h2>
+                    <div className="meta">
+                      <span className={`tag st-${status}`}>{status || '…'}</span>
+                      {view?.severity && <span className={`tag sev-${view.severity}`}>{view.severity}</span>}
+                      {view?.mode && <span className={`tag mode-${view.mode}`}>memory · {view.mode}</span>}
+                      {out?.fast_path && <span className="tag fast" title="Followed a playbook from memory"><Icon name="bolt" size={12} /> fast path</span>}
+                      {out?.fast_path_declined && <span className="tag warn" title="The Remediator checked the evidence and the playbook did not apply">fast path declined</span>}
+                      {out?.unconfirmed_root_cause && <span className="tag warn" title="Fixed, but no agent confirmed the root cause">cause unconfirmed</span>}
+                      {streamState === 'reconnecting' && <span className="tag warn">reconnecting…</span>}
+                    </div>
+                  </div>
+                </div>
+                <div className="head-actions">
+                  {running && elapsed >= CANCEL_AFTER_S && <button className="danger" onClick={cancel}><Icon name="x" size={14} /> Cancel</button>}
+                  {!running && <button className="btn small" onClick={downloadTrace}><Icon name="doc" size={14} /> Trace</button>}
+                  <button className="btn small graph-toggle" onClick={() => setGraphOpen((v) => !v)}><Icon name="graph" size={14} /> {graphOpen ? 'Timeline' : 'Graph'}</button>
                 </div>
               </div>
-              <div className="head-actions">
-                {streamState === 'reconnecting' && <span className="badge warn">reconnecting…</span>}
-                {running && <span className="muted">{elapsed}s</span>}
-                {running && elapsed >= CANCEL_AFTER_S && <button className="danger" onClick={cancel}>Cancel</button>}
-                {!running && <button className="link" onClick={downloadTrace}>trace (markdown)</button>}
-                <button className="link graph-toggle" onClick={() => setGraphOpen((v) => !v)}>{graphOpen ? 'Timeline' : 'Graph'}</button>
+              <div className="metrics">
+                <Metric icon="steps" value={String(view?.steps ?? 0)} label="steps" />
+                <Metric icon="token" value={(view?.tokens ?? 0).toLocaleString()} label="tokens" />
+                <Metric icon="coin" value={money(trace?.cost.total_usd ?? view?.cost_usd)} label="LLM cost" />
+                <Metric icon="clock" value={running ? fmtTime(elapsed) : trace ? (trace.cost.llm_ms < 1000 ? `${trace.cost.llm_ms} ms` : fmtTime(Math.round(trace.cost.llm_ms / 1000))) : '–'}
+                        label={running ? 'elapsed' : 'model time'} />
               </div>
+              <Pipeline stages={stages} />
             </header>
 
             {failed && (
-              <div className="banner bad" role="alert">
-                <b>The crew could not resolve this.</b> {view?.reason ? `Reason: ${view.reason.replace(/_/g, ' ')}. ` : ''}
-                {out?.escalated_to ? <>Escalated to <b>{out.escalated_to}</b>. </> : 'Escalating to the on-call owner. '}
-                <button className="link" onClick={downloadTrace}>Read the trace</button>
+              <div className="banner bad inline" role="alert">
+                <Icon name="siren" size={18} />
+                <div><b>The crew could not resolve this.</b> {view?.reason ? `Reason: ${view.reason.replace(/_/g, ' ')}. ` : ''}
+                  {out?.escalated_to ? <>Escalated to <b>{out.escalated_to}</b>. </> : 'Escalating to the on-call owner. '}
+                  <button className="link" onClick={downloadTrace}>Read the trace</button></div>
               </div>
             )}
 
             {trace && trace.memory_used.length > 0 && (
-              <div className="memory-used">
-                <b>Remembered</b>
-                {trace.memory_used.slice(0, 3).map((m) => (
-                  <span key={m.incident} className="chip" title={`matched by ${m.basis}`}>
-                    {m.title || m.incident} · {m.score.toFixed(2)}{m.playbook_name ? ` · ${m.playbook_name}` : ''}
-                  </span>
-                ))}
-              </div>
+              <section className="recall-card">
+                <div className="card-head"><Icon name="brain" size={16} /> <b>Hindsight recalled</b>
+                  <span className="muted">similar past incidents, scored on graph structure and text</span></div>
+                <div className="recall-list">
+                  {trace.memory_used.slice(0, 3).map((m) => (
+                    <div key={m.incident} className="recall-item">
+                      <Ring value={m.score} label={`similarity ${m.score.toFixed(2)}`} />
+                      <div><b>{m.title || m.incident}</b>
+                        <small className="muted">matched by {m.basis}{m.playbook_name ? <> · playbook <em>{m.playbook_name}</em></> : null}</small></div>
+                    </div>
+                  ))}
+                </div>
+              </section>
             )}
 
             {view?.hypotheses && view.hypotheses.length > 0 && (
-              <div className="hyps">
+              <section className="hyp-card">
+                <div className="card-head"><Icon name="search" size={16} /> <b>Hypotheses</b></div>
                 {view.hypotheses.slice(0, 3).map((h) => (
-                  <span key={h.id} className={`hyp ${h.status}`} title={h.status}>{Math.round(h.score * 100)}% {h.text}</span>
+                  <div key={h.id} className={`hyp ${h.status}`}>
+                    <span className="hyp-bar"><i style={{ width: `${Math.round(h.score * 100)}%` }} /></span>
+                    <span className="mono">{Math.round(h.score * 100)}%</span>
+                    <span className="hyp-text">{h.text}</span>
+                    <span className={`tag ${h.status === 'confirmed' ? 'ok' : h.status === 'rejected' ? 'dim' : ''}`}>{h.status}</span>
+                  </div>
                 ))}
-              </div>
+              </section>
             )}
 
             {streamState === 'error' && <p className="error">Could not open the live stream for this incident.</p>}
-            {entries.length === 0 && streamState !== 'error' && <p className="muted pad">Waiting for the crew to start{running ? '…' : '.'}</p>}
+            {entries.length === 0 && streamState !== 'error' && <p className="muted pad"><span className="spinner" /> Paging the crew…</p>}
             <Timeline entries={entries} running={running} selectedAction={actionId} onSelectAction={(id) => { setActionId(id); setGraphOpen(true) }} />
             {view && ended && view.root_causes.length > 0 && (
-              <p className="muted pad">Root cause confirmed by <AgentChip agent={view.root_causes[0].confirmed_by} /> on {view.root_causes[0].label}.</p>
+              <p className="muted pad">Root cause confirmed by <AgentChip agent={view.root_causes[0].confirmed_by} /> on a {view.root_causes[0].label}.</p>
             )}
           </>
         )}
@@ -176,4 +210,8 @@ export default function Console({ tkey, onSignOut }: { tkey: string; onSignOut: 
       </section>
     </div>
   )
+}
+
+function Metric({ icon, value, label }: { icon: string; value: string; label: string }) {
+  return <div className="metric"><Icon name={icon} size={16} /><span><b>{value}</b><small>{label}</small></span></div>
 }

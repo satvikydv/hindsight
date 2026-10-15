@@ -67,6 +67,36 @@ export function buildTimeline(events: Ev[]): Entry[] {
   return out
 }
 
+export const STAGES = ['triage', 'investigator', 'remediator', 'scribe'] as const
+export type Stage = (typeof STAGES)[number]
+export type StageState = 'idle' | 'active' | 'done' | 'skipped'
+export interface StageInfo { state: StageState; turns: number; actions: number }
+
+/**
+ * Where the crew is: each agent is idle, active, done, or skipped (a later agent ran without it, as on the fast path,
+ * which goes from Triage straight to the Remediator). `turns` > 1 means the coordinator bounced work back to it.
+ */
+export function pipeline(entries: Entry[], running: boolean): Record<Stage, StageInfo> {
+  const info = Object.fromEntries(STAGES.map((s) => [s, { state: 'idle', turns: 0, actions: 0 }])) as Record<Stage, StageInfo>
+  let last: Stage | null = null
+  for (const e of entries) {
+    if (e.kind !== 'agent' && e.kind !== 'call') continue
+    const a = e.agent as Stage
+    if (!(a in info)) continue
+    if (e.kind === 'agent') info[a].turns++
+    else info[a].actions++
+    last = a
+  }
+  const reached = last ? STAGES.indexOf(last) : -1
+  STAGES.forEach((s, i) => {
+    const seen = info[s].turns + info[s].actions > 0
+    if (s === last && running) info[s].state = 'active'
+    else if (seen) info[s].state = 'done'
+    else if (i < reached) info[s].state = 'skipped'
+  })
+  return info
+}
+
 export type Tone = 'ok' | 'warn' | 'bad' | 'pending'
 
 export function toneOf(outcome: string | undefined, pending = false): Tone {

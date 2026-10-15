@@ -1,26 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { useMemo, useState } from 'react'
+import { Area, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { BenchReport, BenchRow, ModeStats, request } from '../api'
 import { useAsync } from '../hooks'
+import Icon from './Icons'
 
-// SVG attributes do not resolve CSS variables reliably, so the chart takes its palette from the colour scheme in JS.
-const PALETTE = {
-  dark: { off: '#8b949e', vector: '#e3b341', graph: '#3fb950', grid: '#30363d', axis: '#8b949e', tip: '#161b22' },
-  light: { off: '#6e7781', vector: '#bf8700', graph: '#1a7f37', grid: '#d0d7de', axis: '#59636e', tip: '#ffffff' },
-}
-
-function useDark(): boolean {
-  const query = '(prefers-color-scheme: dark)'
-  const [dark, setDark] = useState(() => window.matchMedia(query).matches)
-  useEffect(() => {
-    const m = window.matchMedia(query)
-    const on = () => setDark(m.matches)
-    m.addEventListener('change', on)
-    return () => m.removeEventListener('change', on)
-  }, [])
-  return dark
-}
+// SVG attributes do not resolve CSS variables reliably, so the chart palette lives here.
+const PAL = { off: '#94a3b8', vector: '#ffc857', graph: '#7ee787', grid: '#1e2836', axis: '#64748b', tip: '#0f141c' }
 const MODE_LABEL: Record<string, string> = { off: 'No memory', vector: 'Vector only', graph: 'Graph memory' }
+const colorOf = (m: string) => PAL[m as 'off' | 'vector' | 'graph'] ?? '#4fd1ff'
 
 const pct = (v: number | null | undefined) => (v == null ? 'n/a' : `${Math.round(v * 100)}%`)
 const num = (v: number | null | undefined, d = 1) => (v == null ? 'n/a' : v.toFixed(d))
@@ -45,34 +32,38 @@ export default function Benchmarks() {
   const rows = list.data?.benchmarks ?? []
   const id = chosen ?? pickDefault(rows)
   const report = useAsync(() => (id ? request<BenchReport>(`/bench/${id}`, null) : Promise.resolve(null)), [id])
-  const [window_, setWindow] = useState(5)
+  const [win, setWin] = useState(5)
 
   if (list.error) return <p className="error pad">{list.error}</p>
-  if (list.loading) return <p className="muted pad">Loading benchmarks…</p>
+  if (list.loading) return <p className="muted pad"><span className="spinner" /> Loading benchmarks…</p>
   if (!rows.length) return (
     <div className="placeholder"><h2>No benchmark has been run yet</h2>
       <p className="muted">Run <code>python -m api.bench.runner</code> and commit the report under <code>docs/results/</code>.</p></div>
   )
 
   return (
-    <div className="bench">
-      <header className="bench-head">
-        <h1>Benchmarks</h1>
-        <label>Run
+    <div className="page">
+      <header className="page-head">
+        <div>
+          <span className="eyebrow"><Icon name="chart" size={13} /> Ablation study</span>
+          <h1>Does graph memory make the crew better?</h1>
+          <p className="muted">The same incidents, run three ways: no memory, vector recall only, and full graph memory. Precomputed, so this page costs nothing to view.</p>
+        </div>
+        <label className="field inline">
+          <span>Run</span>
           <select value={id ?? ''} onChange={(e) => setChosen(e.target.value)}>
             {rows.map((r) => <option key={r.id} value={r.id}>{r.id} · {r.llm} · {r.incidents} incidents{r.partial ? ' · partial' : ''}</option>)}
           </select>
         </label>
       </header>
       {report.error && <p className="error pad">{report.error}</p>}
-      {report.data && <Report r={report.data} win={window_} setWin={setWindow} />}
+      {report.data && <Report r={report.data} win={win} setWin={setWin} />}
     </div>
   )
 }
 
 function Report({ r, win, setWin }: { r: BenchReport; win: number; setWin: (n: number) => void }) {
   const modes = Object.keys(r.aggregate.modes)
-  const pal = PALETTE[useDark() ? 'dark' : 'light']
   const scripted = r.config.llm === 'scripted'
   const g = r.aggregate.comparisons.graph
   const m = r.aggregate.modes
@@ -89,90 +80,119 @@ function Report({ r, win, setWin }: { r: BenchReport; win: number; setWin: (n: n
     return xs.map((x, i) => Object.fromEntries([['index', x], ...modes.map((mode) => [mode, per[mode][i]])]))
   }, [r, modes.join(), win])      // eslint-disable-line react-hooks/exhaustive-deps
 
+  const maxRepeat = Math.max(...modes.map((x) => m[x].steps_repeat ?? 0), 1)
+
   return (
     <>
       {scripted && (
-        <div className="banner warn" role="note">
-          <b>Scripted policy, not the language model.</b> This run validates the pipeline and the graph mechanics; it does not
-          show how the real agents perform. Costs are nominal and nothing was spent.
+        <div className="banner warn inline" role="note">
+          <Icon name="shield" size={18} />
+          <div><b>Scripted policy, not the language model.</b> This run validates the pipeline and the graph mechanics; it does not
+            show how the real agents perform. Costs are nominal and nothing was spent.</div>
         </div>
       )}
-      {r.partial && <div className="banner warn" role="note"><b>Partial run</b>, stopped early ({r.stopped_reason}). The numbers cover only what ran.</div>}
+      {r.partial && <div className="banner warn inline" role="note"><b>Partial run</b>, stopped early ({r.stopped_reason}). The numbers cover only what ran.</div>}
 
       {g && (
         <div className="cards">
-          <Card title="Fewer steps, repeat incidents" value={g.steps_reduction_repeat_pct == null ? 'n/a' : `${num(g.steps_reduction_repeat_pct, 0)}%`} sub="graph vs no memory" />
-          <Card title="Fewer tokens, repeat incidents" value={g.tokens_reduction_repeat_pct == null ? 'n/a' : `${num(g.tokens_reduction_repeat_pct, 0)}%`} sub="graph vs no memory" />
-          <Card title="Resolution rate" value={pct(m.graph?.resolution_rate)} sub={`no memory ${pct(m.off?.resolution_rate)}`} />
-          <Card title="Harmful actions" value={String(m.graph?.harmful_total ?? 'n/a')} sub={`${m.graph?.injection_cases ?? 0} planted injections: ${m.graph?.injection_harmful ?? 0} harmful`} good={m.graph?.harmful_total === 0} />
+          <Card icon="steps" title="Fewer steps on repeats" value={g.steps_reduction_repeat_pct == null ? 'n/a' : `${num(g.steps_reduction_repeat_pct, 0)}%`} sub="graph vs no memory" accent="green" />
+          <Card icon="token" title="Fewer tokens on repeats" value={g.tokens_reduction_repeat_pct == null ? 'n/a' : `${num(g.tokens_reduction_repeat_pct, 0)}%`} sub="graph vs no memory" accent="cyan" />
+          <Card icon="check" title="Resolution rate" value={pct(m.graph?.resolution_rate)} sub={`no memory ${pct(m.off?.resolution_rate)}`} accent="violet" />
+          <Card icon="shield" title="Harmful actions" value={String(m.graph?.harmful_total ?? 'n/a')} sub={`${m.graph?.injection_cases ?? 0} planted injections, ${m.graph?.injection_harmful ?? 0} harmful`} accent={m.graph?.harmful_total === 0 ? 'green' : 'red'} />
         </div>
       )}
 
-      <section>
-        <div className="sec-head">
-          <h2>Learning curve</h2>
-          <label className="muted">smoothing
-            <select value={win} onChange={(e) => setWin(Number(e.target.value))}>
-              <option value={1}>none</option><option value={3}>3 incidents</option><option value={5}>5 incidents</option>
-            </select>
-          </label>
-        </div>
-        <p className="muted">Steps to resolve each incident, in the order they arrive (mean over {r.config.seeds} seed{r.config.seeds > 1 ? 's' : ''}). A falling line is the crew learning.</p>
-        <div className="chart">
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={series} margin={{ top: 8, right: 16, left: 0, bottom: 22 }}>
-              <CartesianGrid stroke={pal.grid} strokeDasharray="3 3" />
-              <XAxis dataKey="index" stroke={pal.axis} label={{ value: 'incident #', position: 'insideBottom', offset: -2, fill: pal.axis }} />
-              <YAxis stroke={pal.axis} domain={[0, 'auto']} label={{ value: 'steps', angle: -90, position: 'insideLeft', fill: pal.axis }} />
-              <Tooltip contentStyle={{ background: pal.tip, border: `1px solid ${pal.grid}` }} />
-              <Legend />
-              {modes.map((mode) => (
-                <Line key={mode} type="monotone" dataKey={mode} name={MODE_LABEL[mode] ?? mode}
-                      stroke={pal[mode as 'off' | 'vector' | 'graph'] ?? '#58a6ff'} isAnimationActive={false}
-                      strokeWidth={mode === 'off' ? 5 : mode === 'graph' ? 3 : 2} strokeDasharray={mode === 'vector' ? '6 4' : undefined}
-                      dot={false} connectNulls />
+      <div className="bench-grid">
+        <section className="panel chart-panel">
+          <div className="sec-head">
+            <div><h2>Learning curve</h2>
+              <p className="muted small">Steps per incident in arrival order, mean of {r.config.seeds} seed{r.config.seeds > 1 ? 's' : ''}. Lower is better.</p></div>
+            <div className="seg small" role="radiogroup" aria-label="Smoothing">
+              {[[1, 'raw'], [3, '3'], [5, '5']].map(([v, l]) => (
+                <label key={v} className={win === v ? 'on' : ''}><input type="radio" checked={win === v} onChange={() => setWin(v as number)} />{l}</label>
               ))}
-            </LineChart>
+            </div>
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={series} margin={{ top: 8, right: 12, left: -8, bottom: 18 }}>
+              <defs>
+                <linearGradient id="gGraph" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stopColor={PAL.graph} stopOpacity={0.35} /><stop offset="1" stopColor={PAL.graph} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke={PAL.grid} vertical={false} />
+              <XAxis dataKey="index" stroke={PAL.axis} tickLine={false} axisLine={false} fontSize={11}
+                     label={{ value: 'incident #', position: 'insideBottom', offset: -10, fill: PAL.axis, fontSize: 11 }} />
+              <YAxis stroke={PAL.axis} domain={[0, 'auto']} tickLine={false} axisLine={false} fontSize={11} />
+              <Tooltip contentStyle={{ background: PAL.tip, border: `1px solid ${PAL.grid}`, borderRadius: 10 }} labelFormatter={(v) => `incident ${v}`} />
+              <Legend verticalAlign="top" height={28} iconType="plainline" />
+              {modes.includes('graph') && (
+                <Area type="monotone" dataKey="graph" name={MODE_LABEL.graph} stroke={PAL.graph} strokeWidth={3}
+                      fill="url(#gGraph)" isAnimationActive={false} connectNulls dot={false} />
+              )}
+              {modes.filter((x) => x !== 'graph').map((mode) => (
+                <Line key={mode} type="monotone" dataKey={mode} name={MODE_LABEL[mode] ?? mode} stroke={colorOf(mode)}
+                      strokeWidth={mode === 'off' ? 4 : 2} strokeDasharray={mode === 'vector' ? '6 4' : undefined}
+                      strokeOpacity={mode === 'off' ? 0.6 : 1} isAnimationActive={false} dot={false} connectNulls />
+              ))}
+            </ComposedChart>
           </ResponsiveContainer>
-        </div>
-      </section>
+        </section>
 
-      <section>
+        <section className="panel bars-panel">
+          <h2>Repeat incidents</h2>
+          <p className="muted small">Mean steps once the crew has seen the fault class before.</p>
+          <div className="mode-bars">
+            {modes.map((x) => (
+              <div key={x} className="mode-bar">
+                <span className="mb-label"><i style={{ background: colorOf(x) }} />{MODE_LABEL[x] ?? x}</span>
+                <span className="mb-track"><span className="mb-fill" style={{ width: `${((m[x].steps_repeat ?? 0) / maxRepeat) * 100}%`, background: colorOf(x) }} /></span>
+                <span className="mono">{num(m[x].steps_repeat)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mini-stats">
+            <div><b>{pct(m.graph?.recall_at_3)}</b><small>Recall@3, graph</small></div>
+            <div><b>{pct(m.vector?.recall_at_3)}</b><small>Recall@3, vector</small></div>
+            <div><b>{pct(m.graph?.fast_path_rate_repeat)}</b><small>fast path on repeats</small></div>
+          </div>
+        </section>
+      </div>
+
+      <section className="panel">
         <h2>Ablation</h2>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>metric</th>{modes.map((x) => <th key={x}>{MODE_LABEL[x] ?? x}</th>)}</tr></thead>
+            <thead><tr><th>metric</th>{modes.map((x) => <th key={x} className={x === 'graph' ? 'hl-col' : ''}><i className="dot" style={{ background: colorOf(x) }} />{MODE_LABEL[x] ?? x}</th>)}</tr></thead>
             <tbody>
               {ROWS.map(([label, key, fmt]) => (
-                <tr key={key}><th scope="row">{label}</th>{modes.map((x) => <td key={x}>{fmt(m[x][key] as any)}</td>)}</tr>
+                <tr key={key}><th scope="row">{label}</th>{modes.map((x) => <td key={x} className={`mono${x === 'graph' ? ' hl-col' : ''}`}>{fmt(m[x][key] as any)}</td>)}</tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="muted">{r.records.length} incidents · total LLM cost {usd(r.total_cost_usd)}{scripted ? ' (nominal)' : ''} · {r.config.llm} · started {r.started_at.slice(0, 16).replace('T', ' ')} UTC</p>
+        <p className="muted small">{r.records.length} incidents · total LLM cost {usd(r.total_cost_usd)}{scripted ? ' (nominal)' : ''} · {r.config.llm} · started {r.started_at.slice(0, 16).replace('T', ' ')} UTC</p>
       </section>
 
       {r.aggregate.targets && (
-        <section>
+        <section className="panel">
           <h2>Against the goals</h2>
-          <p className="muted">These are the targets set in advance. They are goals, and a miss is reported as a miss.</p>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th>goal</th><th>target</th><th>measured</th><th /></tr></thead>
-              <tbody>
-                {Object.entries(r.aggregate.targets).map(([k, t]) => (
-                  <tr key={k}><th scope="row">{t.label}</th><td>{t.target}</td><td>{t.measured == null ? 'n/a' : num(t.measured, t.measured % 1 ? 2 : 0)}</td>
-                    <td><span className={`badge ${t.met == null ? '' : t.met ? 'ok' : 'warn'}`}>{t.met == null ? 'n/a' : t.met ? 'met' : 'not met'}</span></td></tr>
-                ))}
-              </tbody>
-            </table>
+          <p className="muted small">Targets set before the run. A miss is reported as a miss.</p>
+          <div className="goals">
+            {Object.entries(r.aggregate.targets).map(([k, t]) => (
+              <div key={k} className={`goal ${t.met == null ? '' : t.met ? 'met' : 'missed'}`}>
+                <span className="goal-icon"><Icon name={t.met ? 'check' : t.met === false ? 'x' : 'clock'} size={14} /></span>
+                <span className="goal-label">{t.label}</span>
+                <span className="mono">{t.measured == null ? 'n/a' : num(t.measured, t.measured % 1 ? 2 : 0)} <small className="muted">/ {t.target}</small></span>
+              </div>
+            ))}
           </div>
         </section>
       )}
 
-      <section>
+      <section className="panel subtle">
         <h2>Not measured yet</h2>
-        <p className="muted">Concurrency under load and the tenant-isolation check appear here once they have been run against this build. Isolation is covered by the automated test suite in the meantime.</p>
+        <p className="muted small">Concurrency under load and the tenant-isolation check appear here once they have been run against this build. Isolation is covered by the automated test suite in the meantime.</p>
       </section>
     </>
   )
@@ -194,12 +214,13 @@ const ROWS: [string, Key, (v: number | null) => string][] = [
   ['steps on never-failed services', 'heldout_steps', (v) => num(v)],
 ]
 
-function Card({ title, value, sub, good }: { title: string; value: string; sub: string; good?: boolean }) {
+function Card({ icon, title, value, sub, accent }: { icon: string; title: string; value: string; sub: string; accent: string }) {
   return (
-    <div className={`card${good ? ' good' : ''}`}>
-      <span className="muted">{title}</span>
+    <div className={`stat-card accent-${accent}`}>
+      <span className="stat-icon"><Icon name={icon} size={18} /></span>
+      <span className="muted small">{title}</span>
       <strong>{value}</strong>
-      <span className="muted">{sub}</span>
+      <span className="muted small">{sub}</span>
     </div>
   )
 }
