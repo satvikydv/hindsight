@@ -8,6 +8,7 @@ Time: one tick = 1 simulated minute. Actions advance the tick themselves; the to
 read tool call. `advance()` skips simulated time between incidents (used for playbook decay).
 """
 
+import dataclasses
 import random
 import zlib
 from dataclasses import dataclass, field
@@ -73,6 +74,31 @@ class World:
         self.deploy_count: dict[str, int] = {}
         for d in company.deploys:
             self.deploy_count[d["service"]] = self.deploy_count.get(d["service"], 0) + 1
+
+    # ---- persistence -----------------------------------------------------------------------------------------
+    def snapshot(self) -> dict:
+        """Everything that is not derivable from the company seed, as JSON-safe data. The ground truth is persisted
+        to a file next to the server, never to the graph, so agents still cannot read it, but a restart does not
+        make an active incident look 'healed'."""
+        s = self.rng.getstate()
+        return {"seed": self.seed, "tick": self.tick, "offset_ms": self.offset_ms,
+                "faults": {iid: dataclasses.asdict(f) for iid, f in self.faults.items()},
+                "flag_values": self.flag_values, "deploy_service": self.deploy_service,
+                "latest_deploy": self.latest_deploy, "deploy_count": self.deploy_count,
+                "rng": [s[0], list(s[1]), s[2]]}
+
+    @classmethod
+    def restore(cls, company: Company, snap: dict) -> "World":
+        w = cls(company, snap["seed"])
+        w.tick, w.offset_ms = snap["tick"], snap["offset_ms"]
+        w.flag_values, w.deploy_service = snap["flag_values"], snap["deploy_service"]
+        w.latest_deploy, w.deploy_count = snap["latest_deploy"], snap["deploy_count"]
+        for iid, f in snap["faults"].items():
+            f["herrings"] = [tuple(h) for h in f["herrings"]]
+            w.faults[iid] = Fault(**f)
+        r = snap["rng"]
+        w.rng.setstate((r[0], tuple(r[1]), r[2]))
+        return w
 
     # ---- clock -----------------------------------------------------------------------------------------------
     @property

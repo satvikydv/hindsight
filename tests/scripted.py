@@ -6,6 +6,7 @@ and context messages) moves on to that agent's next turn_plan; the last one repe
 calls finish. ("__crash__", {}) raises, to simulate the server dying mid-turn.
 """
 
+import re
 from types import SimpleNamespace
 
 from api.llm import LLMResult, LLMUnavailable, ScriptedLLM, ToolCall
@@ -30,6 +31,10 @@ class Crew:
         agent = next(name for marker, name in AGENTS.items() if marker in system)
         if agent == "scribe":
             return LLMResult(self.postmortem)
+        if hasattr(self.env, "bind"):      # the API creates incident ids server-side: learn it from the context
+            m = re.search(r"INCIDENT (\w{26}):", messages[1]["content"])
+            if m:
+                self.env.bind(m.group(1))
         if len(messages) == 2:
             self.turns[agent] = self.turns.get(agent, 0) + 1
         turns = self.plans[agent]

@@ -71,9 +71,10 @@ class Coordinator:
         """Stop after the current tool call; the incident ends failed with reason cancelled (PRD §13)."""
         self._cancelled.add(iid)
 
-    def launch(self, fault_class: str, service: str | None = None, **inject) -> str:
-        """Inject a fault, page the crew and open the incident. Returns the incident id (use run() next)."""
-        iid = new_id()
+    def launch(self, fault_class: str, service: str | None = None, iid: str | None = None, **inject) -> str:
+        """Inject a fault, page the crew and open the incident. Returns the incident id (use run() next). The API
+        passes `iid` so it can hand the id to the client before the (possibly queued) incident actually starts."""
+        iid = iid or new_id()
         write_events(self.g, self.world.inject(iid, fault_class, service, **inject))
         open_from_page(self.g, self.world, iid)
         return iid
@@ -269,7 +270,9 @@ class Coordinator:
                            ctx.now, res.usage)
         except LLMUnavailable:
             log.warning("postmortem for %s written as a stub: LLM unavailable", ctx.iid)
-        out = execute(ctx, "scribe", "write_postmortem", {"text": text or stub_postmortem(view, report)}, seq.action())
+        pm_args = {"text": text or stub_postmortem(view, report)}
+        self.emit("tool_called", {"agent": "scribe", "tool": "write_postmortem", "args": pm_args})
+        out = execute(ctx, "scribe", "write_postmortem", pm_args, seq.action())
         if pm_msg:
             ep.link_message_action(self.g, pm_msg, out.action_id)
         self.emit("tool_result", {"agent": "scribe", "tool": "write_postmortem", "outcome": out.outcome,

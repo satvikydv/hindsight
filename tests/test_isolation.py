@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from api.graph import queries as q
 from api.graph.client import TenantGraph, get_db, graph_name
-from api.main import app
+from api.main import create_app
 from api.sim.generator import seed_tenant
 from api.sim.world import World, write_events
 from api.tenancy import create_tenant, delete_tenant, resolve_key
@@ -55,7 +55,7 @@ def test_concurrent_incidents_never_leak_across_tenants(two_tenants):
 def test_api_key_binds_the_graph_and_bad_keys_get_401(two_tenants):
     (a_id, a_key, _, _), (b_id, b_key, gb, _) = two_tenants
     gb.write("CREATE (:Secret {id:'only_in_b'})")
-    with TestClient(app) as client:
+    with TestClient(create_app(resume=False, demo=False)) as client:
         assert client.get("/tenant", headers={"X-Tenant-Key": a_key}).json()["tenant_id"] == a_id
         rb = client.get("/tenant", headers={"X-Tenant-Key": b_key}).json()
         assert rb["tenant_id"] == b_id
